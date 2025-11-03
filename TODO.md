@@ -155,26 +155,26 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.6 Key Exchange - Curve25519 DH
 
-- [ ] `P0` Generate server ephemeral key pair
-  - [ ] Use Curve25519 from TweetNaCl
-  - [ ] Private key: 32 random bytes
-  - [ ] Public key: curve25519_base()
-- [ ] `P0` Receive SSH_MSG_KEX_ECDH_INIT (30)
-  - [ ] Extract client ephemeral public key (32 bytes)
-- [ ] `P0` Compute shared secret K
-  - [ ] curve25519(server_private, client_public)
-- [ ] `P0` Build exchange hash H
-  - [ ] Concatenate: V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, K
-  - [ ] Hash with SHA-256
-  - [ ] First H becomes session_id
-- [ ] `P0` Sign exchange hash with host key
-  - [ ] Ed25519 signature using TweetNaCl
-- [ ] `P0` Build SSH_MSG_KEX_ECDH_REPLY (31)
-  - [ ] Server host public key
-  - [ ] Server ephemeral public key
-  - [ ] Signature
-- [ ] `P0` Send SSH_MSG_KEX_ECDH_REPLY
-- [ ] `P0` Test: Key exchange completes without errors
+- [x] `P0` Generate server ephemeral key pair
+  - [x] Use Curve25519 from TweetNaCl
+  - [x] Private key: 32 random bytes
+  - [x] Public key: curve25519_base()
+- [x] `P0` Receive SSH_MSG_KEX_ECDH_INIT (30)
+  - [x] Extract client ephemeral public key (32 bytes)
+- [x] `P0` Compute shared secret K
+  - [x] curve25519(server_private, client_public)
+- [x] `P0` Build exchange hash H
+  - [x] Concatenate: V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, K
+  - [x] Hash with SHA-256
+  - [x] First H becomes session_id
+- [x] `P0` Sign exchange hash with host key
+  - [x] Ed25519 signature using TweetNaCl
+- [x] `P0` Build SSH_MSG_KEX_ECDH_REPLY (31)
+  - [x] Server host public key
+  - [x] Server ephemeral public key
+  - [x] Signature
+- [x] `P0` Send SSH_MSG_KEX_ECDH_REPLY
+- [x] `P0` Test: Key exchange completes without errors
 
 ### 1.7 Key Derivation
 

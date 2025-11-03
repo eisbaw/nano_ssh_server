@@ -426,6 +426,93 @@ size_t build_kexinit(uint8_t *payload) {
     return offset;
 }
 
+/*
+ * Helper: Write SSH mpint (multi-precision integer) format
+ * Used for shared secret K in exchange hash
+ */
+size_t write_mpint(uint8_t *buf, const uint8_t *data, size_t data_len) {
+    size_t offset = 0;
+    size_t i;
+
+    /* Skip leading zero bytes */
+    for (i = 0; i < data_len && data[i] == 0; i++);
+
+    /* If high bit is set, need to add leading zero byte */
+    if (i < data_len && (data[i] & 0x80)) {
+        write_uint32_be(buf, data_len - i + 1);
+        buf[4] = 0;
+        memcpy(buf + 5, data + i, data_len - i);
+        offset = 4 + 1 + (data_len - i);
+    } else {
+        write_uint32_be(buf, data_len - i);
+        memcpy(buf + 4, data + i, data_len - i);
+        offset = 4 + (data_len - i);
+    }
+
+    return offset;
+}
+
+/*
+ * Compute exchange hash H
+ *
+ * H = SHA256(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K)
+ *
+ * All strings and mpint encoded as SSH string format (4-byte length + data)
+ */
+void compute_exchange_hash(uint8_t *hash_out,
+                           const char *client_version,
+                           const char *server_version,
+                           const uint8_t *client_kexinit, size_t client_kexinit_len,
+                           const uint8_t *server_kexinit, size_t server_kexinit_len,
+                           const uint8_t *server_host_key_blob, size_t host_key_blob_len,
+                           const uint8_t *client_ephemeral_pub, size_t client_eph_len,
+                           const uint8_t *server_ephemeral_pub, size_t server_eph_len,
+                           const uint8_t *shared_secret, size_t shared_secret_len) {
+    hash_state_t h;
+    uint8_t buf[1024];
+    size_t len;
+
+    hash_init(&h);
+
+    /* V_C - client version string */
+    len = write_string(buf, client_version, strlen(client_version));
+    hash_update(&h, buf, len);
+
+    /* V_S - server version string */
+    len = write_string(buf, server_version, strlen(server_version));
+    hash_update(&h, buf, len);
+
+    /* I_C - client KEXINIT payload */
+    write_uint32_be(buf, client_kexinit_len);
+    hash_update(&h, buf, 4);
+    hash_update(&h, client_kexinit, client_kexinit_len);
+
+    /* I_S - server KEXINIT payload */
+    write_uint32_be(buf, server_kexinit_len);
+    hash_update(&h, buf, 4);
+    hash_update(&h, server_kexinit, server_kexinit_len);
+
+    /* K_S - server host public key blob */
+    write_uint32_be(buf, host_key_blob_len);
+    hash_update(&h, buf, 4);
+    hash_update(&h, server_host_key_blob, host_key_blob_len);
+
+    /* Q_C - client ephemeral public key */
+    len = write_string(buf, (const char *)client_ephemeral_pub, client_eph_len);
+    hash_update(&h, buf, len);
+
+    /* Q_S - server ephemeral public key */
+    len = write_string(buf, (const char *)server_ephemeral_pub, server_eph_len);
+    hash_update(&h, buf, len);
+
+    /* K - shared secret (as mpint) */
+    len = write_mpint(buf, shared_secret, shared_secret_len);
+    hash_update(&h, buf, len);
+
+    /* Finalize hash */
+    hash_final(&h, hash_out);
+}
+
 /* ======================
  * Network Helper Functions
  * ====================== */
@@ -539,7 +626,8 @@ ssize_t recv_data(int fd, void *buf, size_t len) {
 /*
  * Handle SSH connection
  */
-void handle_client(int client_fd, struct sockaddr_in *client_addr) {
+void handle_client(int client_fd, struct sockaddr_in *client_addr,
+                   const uint8_t *host_public_key, const uint8_t *host_private_key) {
     char client_ip[INET_ADDRSTRLEN];
     char client_version[256];
     char server_version_line[256];
@@ -645,16 +733,127 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr) {
 
     printf("[+] KEXINIT exchange complete\n");
 
-    /* TODO: Parse client KEXINIT and verify algorithm compatibility */
-    /* TODO: Store both KEXINIT payloads for exchange hash H:
-     *       I_C = client_kexinit
-     *       I_S = server_kexinit
-     */
+    /* ======================
+     * Phase 1.6: Curve25519 Key Exchange
+     * ====================== */
+
+    uint8_t server_ephemeral_private[32];
+    uint8_t server_ephemeral_public[32];
+    uint8_t client_ephemeral_public[32];
+    uint8_t shared_secret[32];
+    uint8_t exchange_hash[32];
+    uint8_t session_id[32];
+    uint8_t host_key_blob[256];
+    size_t host_key_blob_len;
+    uint8_t signature[64];
+    unsigned long long sig_len;
+    uint8_t kex_reply[4096];
+    size_t kex_reply_len;
+    uint8_t kex_init_msg[128];
+    ssize_t kex_init_len;
+    uint32_t client_eph_str_len;
+
+    /* Generate server ephemeral key pair */
+    generate_curve25519_keypair(server_ephemeral_private, server_ephemeral_public);
+    printf("[+] Generated ephemeral key pair\n");
+
+    /* Build server host key blob (ssh-ed25519 format) */
+    host_key_blob_len = 0;
+    host_key_blob_len += write_string(host_key_blob + host_key_blob_len, "ssh-ed25519", 11);
+    host_key_blob_len += write_string(host_key_blob + host_key_blob_len,
+                                      (const char *)host_public_key, 32);
+    printf("[+] Built host key blob (%zu bytes)\n", host_key_blob_len);
+
+    /* Receive SSH_MSG_KEX_ECDH_INIT from client */
+    kex_init_len = recv_packet(client_fd, kex_init_msg, sizeof(kex_init_msg));
+    if (kex_init_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive KEX_ECDH_INIT\n");
+        close(client_fd);
+        return;
+    }
+
+    if (kex_init_msg[0] != SSH_MSG_KEX_ECDH_INIT) {
+        fprintf(stderr, "[-] Expected KEX_ECDH_INIT (30), got %d\n", kex_init_msg[0]);
+        close(client_fd);
+        return;
+    }
+
+    /* Extract client ephemeral public key (Q_C) */
+    if (read_string(kex_init_msg + 1, kex_init_len - 1,
+                   (char *)client_ephemeral_public, 33, &client_eph_str_len) == 0) {
+        fprintf(stderr, "[-] Failed to parse client ephemeral public key\n");
+        close(client_fd);
+        return;
+    }
+
+    if (client_eph_str_len != 32) {
+        fprintf(stderr, "[-] Invalid client ephemeral key length: %u\n", client_eph_str_len);
+        close(client_fd);
+        return;
+    }
+    printf("[+] Received client ephemeral public key (32 bytes)\n");
+
+    /* Compute shared secret K */
+    if (compute_curve25519_shared(shared_secret, server_ephemeral_private,
+                                  client_ephemeral_public) != 0) {
+        fprintf(stderr, "[-] Failed to compute shared secret\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Computed shared secret\n");
+
+    /* Compute exchange hash H */
+    compute_exchange_hash(exchange_hash,
+                         client_version, SERVER_VERSION,
+                         client_kexinit, client_kexinit_len_s,
+                         server_kexinit, server_kexinit_len,
+                         host_key_blob, host_key_blob_len,
+                         client_ephemeral_public, 32,
+                         server_ephemeral_public, 32,
+                         shared_secret, 32);
+    printf("[+] Computed exchange hash H\n");
+
+    /* First exchange hash becomes session_id */
+    memcpy(session_id, exchange_hash, 32);
+    printf("[+] Set session_id\n");
+
+    /* Sign exchange hash with host private key */
+    crypto_sign_detached(signature, &sig_len, exchange_hash, 32, host_private_key);
+    printf("[+] Signed exchange hash (signature: 64 bytes)\n");
+
+    /* Build SSH_MSG_KEX_ECDH_REPLY */
+    kex_reply_len = 0;
+    kex_reply[kex_reply_len++] = SSH_MSG_KEX_ECDH_REPLY;
+
+    /* K_S - server host public key blob */
+    kex_reply_len += write_string(kex_reply + kex_reply_len,
+                                  (const char *)host_key_blob, host_key_blob_len);
+
+    /* Q_S - server ephemeral public key */
+    kex_reply_len += write_string(kex_reply + kex_reply_len,
+                                  (const char *)server_ephemeral_public, 32);
+
+    /* Signature of H (ssh-ed25519 signature format) */
+    {
+        uint8_t sig_blob[128];
+        size_t sig_blob_len = 0;
+        sig_blob_len += write_string(sig_blob, "ssh-ed25519", 11);
+        sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 64);
+        kex_reply_len += write_string(kex_reply + kex_reply_len,
+                                      (const char *)sig_blob, sig_blob_len);
+    }
+
+    /* Send SSH_MSG_KEX_ECDH_REPLY */
+    if (send_packet(client_fd, kex_reply, kex_reply_len) < 0) {
+        fprintf(stderr, "[-] Failed to send KEX_ECDH_REPLY\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent KEX_ECDH_REPLY (%zu bytes)\n", kex_reply_len);
 
     /* TODO: Implement remaining SSH protocol
      *
      * Phase 1 tasks (see TODO.md):
-     * 1.6: Key Exchange - Curve25519 DH
      * 1.7: Key Derivation - Derive encryption keys
      * 1.8: NEWKEYS - Activate encryption
      * 1.9: Encrypted Packets - ChaCha20-Poly1305
@@ -676,6 +875,8 @@ int main(int argc, char *argv[]) {
     int listen_fd;
     int client_fd;
     struct sockaddr_in client_addr;
+    uint8_t host_public_key[32];
+    uint8_t host_private_key[64];
 
     (void)argc;
     (void)argv;
@@ -694,6 +895,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     printf("[+] Libsodium initialized\n");
+
+    /* Generate Ed25519 host key pair */
+    crypto_sign_keypair(host_public_key, host_private_key);
+    printf("[+] Generated Ed25519 host key pair\n");
 
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);
@@ -715,7 +920,7 @@ int main(int argc, char *argv[]) {
         }
 
         /* Handle client connection */
-        handle_client(client_fd, &client_addr);
+        handle_client(client_fd, &client_addr, host_public_key, host_private_key);
 
         /* For now, only handle one connection then exit */
         /* TODO: In production, this should loop forever or handle multiple clients */
