@@ -18,35 +18,35 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 ## Phase 0: Project Setup
 
 ### Environment Setup
-- [ ] `P0` Create `shell.nix` with all dependencies
-  - [ ] gcc, gnumake
-  - [ ] openssh (client for testing)
-  - [ ] just
-  - [ ] valgrind
-  - [ ] gdb
-  - [ ] sshpass (for automated testing)
-  - [ ] xxd (for key conversion)
-  - [ ] Crypto library (TweetNaCl or alternative)
-- [ ] `P0` Test `nix-shell` loads correctly
-- [ ] `P0` Document `shell.nix` usage in README
+- [x] `P0` Create `shell.nix` with all dependencies
+  - [x] gcc, gnumake
+  - [x] openssh (client for testing)
+  - [x] just
+  - [x] valgrind
+  - [x] gdb
+  - [x] sshpass (for automated testing)
+  - [x] xxd (for key conversion)
+  - [x] Crypto library (TweetNaCl or alternative)
+- [x] `P0` Test `nix-shell` loads correctly
+- [x] `P0` Document `shell.nix` usage in README
 
 ### Build System
-- [ ] `P0` Create top-level `Makefile`
-  - [ ] Target: `all` - build all versions
-  - [ ] Target: `clean` - clean all versions
-  - [ ] Target: `size-report` - compare binary sizes
-- [ ] `P0` Create `justfile` with common tasks
-  - [ ] `just build <version>` - build specific version
-  - [ ] `just run <version>` - run server
-  - [ ] `just test <version>` - run tests
-  - [ ] `just connect` - connect with SSH client
-  - [ ] `just clean` - clean build artifacts
-  - [ ] `just size-report` - show binary sizes
-- [ ] `P0` Test build system works
+- [x] `P0` Create top-level `Makefile`
+  - [x] Target: `all` - build all versions
+  - [x] Target: `clean` - clean all versions
+  - [x] Target: `size-report` - compare binary sizes
+- [x] `P0` Create `justfile` with common tasks
+  - [x] `just build <version>` - build specific version
+  - [x] `just run <version>` - run server
+  - [x] `just test <version>` - run tests
+  - [x] `just connect` - connect with SSH client
+  - [x] `just clean` - clean build artifacts
+  - [x] `just size-report` - show binary sizes
+- [x] `P0` Test build system works
 
 ### Directory Structure
-- [ ] `P0` Create `v0-vanilla/` directory
-- [ ] `P0` Create `tests/` directory
+- [x] `P0` Create `v0-vanilla/` directory
+- [x] `P0` Create `tests/` directory
 - [ ] `P1` Create `v1-portable/` directory (when Phase 1 complete)
 - [ ] `P1` Create version directories for optimizations (later)
 
@@ -56,12 +56,12 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 - [ ] `P1` Store in `v0-vanilla/host_key.h`
 
 ### Documentation
-- [ ] `P0` Create README.md with:
-  - [ ] Project overview
-  - [ ] Quick start guide
-  - [ ] Build instructions
-  - [ ] Testing instructions
-  - [ ] Links to docs/
+- [x] `P0` Create README.md with:
+  - [x] Project overview
+  - [x] Quick start guide
+  - [x] Build instructions
+  - [x] Testing instructions
+  - [x] Links to docs/
 
 ---
 
@@ -70,179 +70,191 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 **Goal:** Working SSH server on Linux, correctness over size.
 
 ### Setup v0-vanilla Structure
-- [ ] `P0` Create `v0-vanilla/Makefile`
-- [ ] `P0` Create `v0-vanilla/main.c` skeleton
-- [ ] `P0` Test basic compilation
+- [x] `P0` Create `v0-vanilla/Makefile`
+- [x] `P0` Create `v0-vanilla/main.c` skeleton
+- [x] `P0` Test basic compilation
 
 ### 1.1 Network Layer (POSIX Sockets)
 
-- [ ] `P0` Implement TCP server socket creation
-  - [ ] `socket()` call
-  - [ ] `bind()` to port 2222
-  - [ ] `listen()` for connections
-  - [ ] Handle socket errors
-- [ ] `P0` Implement `accept()` for client connections
-- [ ] `P0` Implement `send()` wrapper
-- [ ] `P0` Implement `recv()` wrapper
-- [ ] `P0` Test: netcat can connect to server
-- [ ] `P0` Test: server doesn't crash on disconnect
+- [x] `P0` Implement TCP server socket creation
+  - [x] `socket()` call
+  - [x] `bind()` to port 2222
+  - [x] `listen()` for connections
+  - [x] Handle socket errors
+- [x] `P0` Implement `accept()` for client connections
+- [x] `P0` Implement `send()` wrapper
+- [x] `P0` Implement `recv()` wrapper
+- [x] `P0` Test: netcat can connect to server
+- [x] `P0` Test: server doesn't crash on disconnect
 
 ### 1.2 Version Exchange
 
-- [ ] `P0` Send server version string
-  - [ ] Format: "SSH-2.0-NanoSSH_0.1\r\n"
-  - [ ] Send immediately after accept
-- [ ] `P0` Receive client version string
-  - [ ] Read until \n found
-  - [ ] Validate starts with "SSH-2.0-"
-  - [ ] Store for exchange hash
-- [ ] `P0` Test: netcat sees version string
-- [ ] `P0` Test: can send "SSH-2.0-Test\r\n" via netcat
+- [x] `P0` Send server version string
+  - [x] Format: "SSH-2.0-NanoSSH_0.1\r\n"
+  - [x] Send immediately after accept
+- [x] `P0` Receive client version string
+  - [x] Read until \n found
+  - [x] Validate starts with "SSH-2.0-"
+  - [x] Store for exchange hash
+- [x] `P0` Test: netcat sees version string
+- [x] `P0` Test: can send "SSH-2.0-Test\r\n" via netcat
 
 ### 1.3 Binary Packet Protocol (Unencrypted)
 
-- [ ] `P0` Implement packet framing functions
-  - [ ] `write_uint32_be()` - write big-endian uint32
-  - [ ] `read_uint32_be()` - read big-endian uint32
-  - [ ] `write_string()` - write length-prefixed string
-  - [ ] `read_string()` - read length-prefixed string
-- [ ] `P0` Implement padding calculation
-  - [ ] Ensure minimum 4 bytes
-  - [ ] Ensure total is multiple of 8
-- [ ] `P0` Implement `send_packet()` (unencrypted)
-  - [ ] Write packet_length (4 bytes)
-  - [ ] Write padding_length (1 byte)
-  - [ ] Write payload
-  - [ ] Write random padding
-- [ ] `P0` Implement `recv_packet()` (unencrypted)
-  - [ ] Read packet_length (4 bytes)
-  - [ ] Read full packet based on length
-  - [ ] Extract payload
-- [ ] `P0` Test: can send/receive simple packets
+- [x] `P0` Implement packet framing functions
+  - [x] `write_uint32_be()` - write big-endian uint32
+  - [x] `read_uint32_be()` - read big-endian uint32
+  - [x] `write_string()` - write length-prefixed string
+  - [x] `read_string()` - read length-prefixed string
+- [x] `P0` Implement padding calculation
+  - [x] Ensure minimum 4 bytes
+  - [x] Ensure total is multiple of 8
+- [x] `P0` Implement `send_packet()` (unencrypted)
+  - [x] Write packet_length (4 bytes)
+  - [x] Write padding_length (1 byte)
+  - [x] Write payload
+  - [x] Write random padding
+- [x] `P0` Implement `recv_packet()` (unencrypted)
+  - [x] Read packet_length (4 bytes)
+  - [x] Read full packet based on length
+  - [x] Extract payload
+- [x] `P0` Test: can send/receive simple packets
 
 ### 1.4 Cryptography Setup
 
-- [ ] `P0` Choose crypto library (TweetNaCl recommended)
-- [ ] `P0` Add crypto library to build
-- [ ] `P0` Implement random number generation
-  - [ ] `/dev/urandom` wrapper for Linux
-  - [ ] Test: generates non-zero random bytes
-- [ ] `P0` Implement SHA-256 hashing
-  - [ ] Single-shot hash function
-  - [ ] Incremental hash (init/update/final)
-  - [ ] Test: verify with known test vectors
+- [x] `P0` Choose crypto library (TweetNaCl recommended)
+- [x] `P0` Add crypto library to build
+- [x] `P0` Implement random number generation
+  - [x] `/dev/urandom` wrapper for Linux
+  - [x] Test: generates non-zero random bytes
+- [x] `P0` Implement SHA-256 hashing
+  - [x] Single-shot hash function
+  - [x] Incremental hash (init/update/final)
+  - [x] Test: verify with known test vectors
 
 ### 1.5 Key Exchange - KEXINIT
 
-- [ ] `P0` Create hardcoded algorithm lists
-  - [ ] KEX: "curve25519-sha256"
-  - [ ] Host key: "ssh-ed25519"
-  - [ ] Cipher: "chacha20-poly1305@openssh.com"
-  - [ ] MAC: "" (AEAD)
-  - [ ] Compression: "none"
-- [ ] `P0` Build KEXINIT packet
-  - [ ] Message type: 20
-  - [ ] Random cookie (16 bytes)
-  - [ ] Algorithm name-lists
-  - [ ] Boolean: FALSE
-  - [ ] Reserved: 0
-- [ ] `P0` Send KEXINIT to client
-- [ ] `P0` Receive KEXINIT from client
-- [ ] `P0` Parse client's algorithm lists
-- [ ] `P0` Verify client supports our algorithms
-- [ ] `P0` Save both KEXINIT payloads (needed for exchange hash)
-- [ ] `P0` Test: SSH client completes KEXINIT exchange
+- [x] `P0` Create hardcoded algorithm lists
+  - [x] KEX: "curve25519-sha256"
+  - [x] Host key: "ssh-ed25519"
+  - [x] Cipher: "chacha20-poly1305@openssh.com"
+  - [x] MAC: "" (AEAD)
+  - [x] Compression: "none"
+- [x] `P0` Build KEXINIT packet
+  - [x] Message type: 20
+  - [x] Random cookie (16 bytes)
+  - [x] Algorithm name-lists
+  - [x] Boolean: FALSE
+  - [x] Reserved: 0
+- [x] `P0` Send KEXINIT to client
+- [x] `P0` Receive KEXINIT from client
+- [ ] `P1` Parse client's algorithm lists
+- [ ] `P1` Verify client supports our algorithms
+- [x] `P0` Save both KEXINIT payloads (needed for exchange hash)
+- [x] `P0` Test: SSH client completes KEXINIT exchange
 
 ### 1.6 Key Exchange - Curve25519 DH
 
-- [ ] `P0` Generate server ephemeral key pair
-  - [ ] Use Curve25519 from TweetNaCl
-  - [ ] Private key: 32 random bytes
-  - [ ] Public key: curve25519_base()
-- [ ] `P0` Receive SSH_MSG_KEX_ECDH_INIT (30)
-  - [ ] Extract client ephemeral public key (32 bytes)
-- [ ] `P0` Compute shared secret K
-  - [ ] curve25519(server_private, client_public)
-- [ ] `P0` Build exchange hash H
-  - [ ] Concatenate: V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, K
-  - [ ] Hash with SHA-256
-  - [ ] First H becomes session_id
-- [ ] `P0` Sign exchange hash with host key
-  - [ ] Ed25519 signature using TweetNaCl
-- [ ] `P0` Build SSH_MSG_KEX_ECDH_REPLY (31)
-  - [ ] Server host public key
-  - [ ] Server ephemeral public key
-  - [ ] Signature
-- [ ] `P0` Send SSH_MSG_KEX_ECDH_REPLY
-- [ ] `P0` Test: Key exchange completes without errors
+- [x] `P0` Generate server ephemeral key pair
+  - [x] Use Curve25519 from TweetNaCl
+  - [x] Private key: 32 random bytes
+  - [x] Public key: curve25519_base()
+- [x] `P0` Receive SSH_MSG_KEX_ECDH_INIT (30)
+  - [x] Extract client ephemeral public key (32 bytes)
+- [x] `P0` Compute shared secret K
+  - [x] curve25519(server_private, client_public)
+- [x] `P0` Build exchange hash H
+  - [x] Concatenate: V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, K
+  - [x] Hash with SHA-256
+  - [x] First H becomes session_id
+- [x] `P0` Sign exchange hash with host key
+  - [x] Ed25519 signature using TweetNaCl
+- [x] `P0` Build SSH_MSG_KEX_ECDH_REPLY (31)
+  - [x] Server host public key
+  - [x] Server ephemeral public key
+  - [x] Signature
+- [x] `P0` Send SSH_MSG_KEX_ECDH_REPLY
+- [x] `P0` Test: Key exchange completes without errors
 
 ### 1.7 Key Derivation
 
-- [ ] `P0` Implement key derivation function
-  - [ ] Input: K, H, letter, session_id
-  - [ ] Output: derived key of specified length
-  - [ ] Handle keys longer than hash output
-- [ ] `P0` Derive all 6 keys
-  - [ ] IV client→server (12 bytes for ChaCha20)
-  - [ ] IV server→client (12 bytes)
-  - [ ] Encryption key client→server (32 bytes)
-  - [ ] Encryption key server→client (32 bytes)
-  - [ ] Integrity key client→server (if needed)
-  - [ ] Integrity key server→client (if needed)
+- [x] `P0` Implement key derivation function
+  - [x] Input: K, H, letter, session_id
+  - [x] Output: derived key of specified length
+  - [x] Handle keys longer than hash output
+- [x] `P0` Derive all 6 keys
+  - [x] IV client→server (12 bytes for ChaCha20)
+  - [x] IV server→client (12 bytes)
+  - [x] Encryption key client→server (32 bytes)
+  - [x] Encryption key server→client (32 bytes)
+  - [x] Integrity key client→server (if needed)
+  - [x] Integrity key server→client (if needed)
 - [ ] `P0` Initialize cipher contexts
-- [ ] `P0` Test: Keys derived correctly (verify with debug output)
+- [x] `P0` Test: Keys derived correctly (verify with debug output)
 
 ### 1.8 NEWKEYS and Encryption Activation
 
-- [ ] `P0` Receive SSH_MSG_NEWKEYS (21) from client
-- [ ] `P0` Activate incoming encryption (client→server keys)
-- [ ] `P0` Send SSH_MSG_NEWKEYS (21) to client
-- [ ] `P0` Activate outgoing encryption (server→client keys)
-- [ ] `P0` Initialize sequence numbers (both to 0)
-- [ ] `P0` Test: Encryption enabled on both sides
+- [x] `P0` Receive SSH_MSG_NEWKEYS (21) from client
+- [x] `P0` Activate incoming encryption (client→server keys)
+- [x] `P0` Send SSH_MSG_NEWKEYS (21) to client
+- [x] `P0` Activate outgoing encryption (server→client keys)
+- [x] `P0` Initialize sequence numbers (both to 0)
+- [x] `P0` Test: Encryption enabled on both sides
 
 ### 1.9 Encrypted Packet Protocol
 
-- [ ] `P0` Implement ChaCha20-Poly1305 encryption
-  - [ ] Two-key variant (OpenSSH style)
-  - [ ] Encrypt packet_length separately
-  - [ ] Encrypt payload
-  - [ ] Compute Poly1305 MAC
-- [ ] `P0` Implement ChaCha20-Poly1305 decryption
-  - [ ] Decrypt packet_length
-  - [ ] Verify MAC before decryption
-  - [ ] Decrypt payload
-- [ ] `P0` Update `send_packet()` to use encryption
-  - [ ] Increment send sequence number
-- [ ] `P0` Update `recv_packet()` to use decryption
-  - [ ] Increment receive sequence number
-- [ ] `P0` Test: Encrypted packets work with SSH client
+**NOTE: ChaCha20-Poly1305 implementation has subtle incompatibility with OpenSSH.**
+**Switched to AES-128-CTR + HMAC-SHA256 instead (simpler, widely supported).**
+
+- [!] `P0` ChaCha20-Poly1305 (BUGGY - OpenSSH incompatibility, decryption fails)
+  - [x] Two-key variant (OpenSSH style) - implemented but not working
+  - [x] 64-byte key material (K_1 || K_2) - fixed
+  - [x] Nonce format (4 zeros + uint64 seq) - fixed
+  - [!] Decryption still produces invalid packet lengths
+  - [!] Code preserved in main.c but not used
+
+- [x] `P0` Implement AES-128-CTR + HMAC-SHA256 (✓ WORKING)
+  - [x] AES-128-CTR encryption using OpenSSL EVP API
+  - [x] HMAC-SHA256 for packet authentication
+  - [x] Update KEXINIT to advertise "aes128-ctr" and "hmac-sha2-256"
+  - [x] Fixed sequence number initialization (start from 3, not 0)
+- [x] `P0` Update `send_packet()` to use AES-128-CTR + HMAC
+  - [x] Encrypt packet with AES-128-CTR
+  - [x] Compute HMAC-SHA256(seq || packet)
+  - [x] Increment send sequence number
+- [x] `P0` Update `recv_packet()` to use AES-128-CTR + HMAC
+  - [x] Read and decrypt first block (16 bytes) to get packet length
+  - [x] Read and decrypt remaining packet bytes
+  - [x] Verify HMAC over decrypted packet
+  - [x] Increment receive sequence number
+- [x] `P0` Test: Encrypted packets work with SSH client
 
 ### 1.10 Service Request
 
-- [ ] `P0` Receive SSH_MSG_SERVICE_REQUEST (5)
-  - [ ] Parse service name
-  - [ ] Verify == "ssh-userauth"
-- [ ] `P0` Send SSH_MSG_SERVICE_ACCEPT (6)
-  - [ ] Echo service name
-- [ ] `P0` Test: Service request completes
+- [x] `P0` Receive SSH_MSG_SERVICE_REQUEST (5)
+  - [x] Parse service name
+  - [x] Verify == "ssh-userauth"
+- [x] `P0` Send SSH_MSG_SERVICE_ACCEPT (6)
+  - [x] Echo service name
+- [x] `P0` Test: Service request completes
 
 ### 1.11 Authentication
 
-- [ ] `P0` Receive SSH_MSG_USERAUTH_REQUEST (50)
-  - [ ] Parse username
-  - [ ] Parse service name
-  - [ ] Parse method name
-  - [ ] If method == "password":
-    - [ ] Parse change_password boolean
-    - [ ] Parse password string
-- [ ] `P0` Implement password verification
-  - [ ] Hardcoded credentials: user="user", pass="password123"
-  - [ ] Compare with received credentials
-- [ ] `P0` Send SSH_MSG_USERAUTH_SUCCESS (52) on match
-- [ ] `P0` Send SSH_MSG_USERAUTH_FAILURE (51) on mismatch
-- [ ] `P0` Test: Correct password authenticates
-- [ ] `P0` Test: Wrong password rejected
+- [x] `P0` Receive SSH_MSG_USERAUTH_REQUEST (50)
+  - [x] Parse username
+  - [x] Parse service name
+  - [x] Parse method name
+  - [x] If method == "password":
+    - [x] Parse change_password boolean
+    - [x] Parse password string
+- [x] `P0` Implement password verification
+  - [x] Hardcoded credentials: user="user", pass="password123"
+  - [x] Compare with received credentials
+- [x] `P0` Send SSH_MSG_USERAUTH_SUCCESS (52) on match
+- [x] `P0` Send SSH_MSG_USERAUTH_FAILURE (51) on mismatch
+- [x] `P0` Test: Correct password authenticates
+- [x] `P0` Test: Wrong password rejected
+- [x] `P0` Handle multiple authentication attempts (e.g., "none" then "password")
 
 ### 1.12 Channel Open
 
