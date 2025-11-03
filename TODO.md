@@ -310,11 +310,25 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.16 Error Handling
 
-- [ ] `P1` Implement SSH_MSG_DISCONNECT (1)
-- [ ] `P1` Handle unexpected message types
-- [ ] `P1` Handle parse errors gracefully
-- [ ] `P1` Handle network errors (connection drop)
-- [ ] `P2` Add debug logging (optional, remove in optimized versions)
+- [x] `P1` Implement SSH_MSG_DISCONNECT (1)
+  - [x] Add disconnect reason codes (RFC 4253 Section 11.1)
+  - [x] Create send_disconnect() helper function
+  - [x] Send disconnect messages before closing on protocol errors
+- [x] `P1` Handle unexpected message types
+  - [x] Protocol version mismatch: PROTOCOL_VERSION_NOT_SUPPORTED
+  - [x] Unexpected KEXINIT: PROTOCOL_ERROR
+  - [x] Key exchange errors: KEY_EXCHANGE_FAILED
+  - [x] Service errors: SERVICE_NOT_AVAILABLE
+  - [x] Channel open failures: Send CHANNEL_OPEN_FAILURE + DISCONNECT
+- [x] `P1` Handle parse errors gracefully
+  - [x] Version string length validation
+  - [x] Protocol error disconnect messages
+  - [x] Proper error messages for debugging
+- [x] `P1` Handle network errors (connection drop)
+  - [x] Distinguish between network errors and protocol errors
+  - [x] Don't send disconnect on network failures
+  - [x] Graceful cleanup on connection loss
+- [ ] `P2` Add debug logging (optional, remove in optimized versions) - Deferred to optimization phases
 
 ---
 

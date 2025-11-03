@@ -71,6 +71,23 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 #define SSH_MSG_CHANNEL_SUCCESS           99
 #define SSH_MSG_CHANNEL_FAILURE           100
 
+/* SSH disconnect reason codes (RFC 4253 Section 11.1) */
+#define SSH_DISCONNECT_HOST_NOT_ALLOWED_TO_CONNECT    1
+#define SSH_DISCONNECT_PROTOCOL_ERROR                 2
+#define SSH_DISCONNECT_KEY_EXCHANGE_FAILED            3
+#define SSH_DISCONNECT_RESERVED                       4
+#define SSH_DISCONNECT_MAC_ERROR                      5
+#define SSH_DISCONNECT_COMPRESSION_ERROR              6
+#define SSH_DISCONNECT_SERVICE_NOT_AVAILABLE          7
+#define SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED 8
+#define SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE        9
+#define SSH_DISCONNECT_CONNECTION_LOST                10
+#define SSH_DISCONNECT_BY_APPLICATION                 11
+#define SSH_DISCONNECT_TOO_MANY_CONNECTIONS           12
+#define SSH_DISCONNECT_AUTH_CANCELLED_BY_USER         13
+#define SSH_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE 14
+#define SSH_DISCONNECT_ILLEGAL_USER_NAME              15
+
 /* Algorithm names for KEXINIT */
 #define KEX_ALGORITHM           "curve25519-sha256"
 #define HOST_KEY_ALGORITHM      "ssh-ed25519"
@@ -518,6 +535,43 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     }
 
     return 0;
+}
+
+/*
+ * Send SSH_MSG_DISCONNECT message
+ *
+ * Format (RFC 4253 Section 11.1):
+ *   byte      SSH_MSG_DISCONNECT (1)
+ *   uint32    reason_code
+ *   string    description (ISO-10646 UTF-8)
+ *   string    language_tag (empty for minimal implementation)
+ *
+ * This should be sent before closing the connection when an error occurs.
+ */
+void send_disconnect(int fd, uint32_t reason_code, const char *description) {
+    uint8_t disconnect_msg[512];
+    size_t msg_len = 0;
+
+    /* Message type */
+    disconnect_msg[msg_len++] = SSH_MSG_DISCONNECT;
+
+    /* Reason code */
+    write_uint32_be(disconnect_msg + msg_len, reason_code);
+    msg_len += 4;
+
+    /* Description string */
+    size_t desc_len = strlen(description);
+    msg_len += write_string(disconnect_msg + msg_len, description, desc_len);
+
+    /* Language tag (empty) */
+    msg_len += write_string(disconnect_msg + msg_len, "", 0);
+
+    /* Try to send, but don't fail if it doesn't work (connection may already be broken) */
+    if (send_packet(fd, disconnect_msg, msg_len) < 0) {
+        fprintf(stderr, "[-] Warning: Failed to send DISCONNECT message\n");
+    } else {
+        printf("[+] Sent SSH_MSG_DISCONNECT: %s (code %u)\n", description, reason_code);
+    }
 }
 
 /*
@@ -1120,7 +1174,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     for (i = 0; i < (int)sizeof(client_version) - 1; i++) {
         n = recv_data(client_fd, &client_version[i], 1);
         if (n <= 0) {
-            fprintf(stderr, "[-] Failed to receive version string\n");
+            fprintf(stderr, "[-] Failed to receive version string (connection closed or error)\n");
+            /* Network error - can't send disconnect */
             close(client_fd);
             return;
         }
@@ -1130,6 +1185,15 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         if (client_version[i] == '\n') {
             break;
         }
+    }
+
+    /* Check if we hit the buffer limit without finding newline */
+    if (i == (int)sizeof(client_version) - 1 && client_version[i] != '\n') {
+        fprintf(stderr, "[-] Version string too long (> %zu bytes)\n", sizeof(client_version) - 1);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Version string exceeds maximum length");
+        close(client_fd);
+        return;
     }
 
     /* Null-terminate */
@@ -1151,6 +1215,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     if (strncmp(client_version, "SSH-2.0-", 8) != 0) {
         fprintf(stderr, "[-] Invalid SSH version: %s\n", client_version);
         fprintf(stderr, "[-] Expected: SSH-2.0-*\n");
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED,
+                       "Only SSH-2.0 is supported");
         close(client_fd);
         return;
     }
@@ -1181,7 +1247,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Receive client's KEXINIT */
     client_kexinit_len_s = recv_packet(client_fd, client_kexinit, sizeof(client_kexinit));
     if (client_kexinit_len_s <= 0) {
-        fprintf(stderr, "[-] Failed to receive client KEXINIT\n");
+        fprintf(stderr, "[-] Failed to receive client KEXINIT (connection error)\n");
+        /* Network error - connection likely closed, can't send disconnect */
         close(client_fd);
         return;
     }
@@ -1190,6 +1257,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Validate it's a KEXINIT message */
     if (client_kexinit[0] != SSH_MSG_KEXINIT) {
         fprintf(stderr, "[-] Expected KEXINIT (20), got message type %d\n", client_kexinit[0]);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Expected KEXINIT message");
         close(client_fd);
         return;
     }
@@ -1237,6 +1306,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     if (kex_init_msg[0] != SSH_MSG_KEX_ECDH_INIT) {
         fprintf(stderr, "[-] Expected KEX_ECDH_INIT (30), got %d\n", kex_init_msg[0]);
+        send_disconnect(client_fd, SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
+                       "Expected KEX_ECDH_INIT message");
         close(client_fd);
         return;
     }
@@ -1464,6 +1535,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     if (service_request[0] != SSH_MSG_SERVICE_REQUEST) {
         fprintf(stderr, "[-] Expected SERVICE_REQUEST (5), got %d\n", service_request[0]);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Expected SERVICE_REQUEST message");
         close(client_fd);
         return;
     }
@@ -1482,6 +1555,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Verify service name is "ssh-userauth" */
     if (strcmp(service_name, "ssh-userauth") != 0) {
         fprintf(stderr, "[-] Unsupported service: %s\n", service_name);
+        send_disconnect(client_fd, SSH_DISCONNECT_SERVICE_NOT_AVAILABLE,
+                       "Only ssh-userauth service is supported");
         close(client_fd);
         return;
     }
@@ -1750,7 +1825,21 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Verify channel type is "session" */
     if (strcmp(channel_type, "session") != 0) {
         fprintf(stderr, "[-] Unsupported channel type: %s\n", channel_type);
-        /* TODO: Send SSH_MSG_CHANNEL_OPEN_FAILURE */
+        /* Send SSH_MSG_CHANNEL_OPEN_FAILURE */
+        uint8_t open_failure[256];
+        size_t failure_len = 0;
+
+        open_failure[failure_len++] = SSH_MSG_CHANNEL_OPEN_FAILURE;
+        write_uint32_be(open_failure + failure_len, client_channel_id);  /* recipient_channel */
+        failure_len += 4;
+        write_uint32_be(open_failure + failure_len, 3);  /* SSH_OPEN_UNKNOWN_CHANNEL_TYPE */
+        failure_len += 4;
+        failure_len += write_string(open_failure + failure_len, "Unknown channel type", 20);
+        failure_len += write_string(open_failure + failure_len, "", 0);  /* language tag */
+
+        send_packet(client_fd, open_failure, failure_len);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Only session channel type is supported");
         close(client_fd);
         return;
     }
