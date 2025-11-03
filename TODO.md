@@ -195,28 +195,28 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 ### 1.8 NEWKEYS and Encryption Activation
 
 - [x] `P0` Receive SSH_MSG_NEWKEYS (21) from client
-- [ ] `P0` Activate incoming encryption (client→server keys)
+- [x] `P0` Activate incoming encryption (client→server keys)
 - [x] `P0` Send SSH_MSG_NEWKEYS (21) to client
-- [ ] `P0` Activate outgoing encryption (server→client keys)
-- [ ] `P0` Initialize sequence numbers (both to 0)
-- [ ] `P0` Test: Encryption enabled on both sides
+- [x] `P0` Activate outgoing encryption (server→client keys)
+- [x] `P0` Initialize sequence numbers (both to 0)
+- [x] `P0` Test: Encryption enabled on both sides
 
 ### 1.9 Encrypted Packet Protocol
 
-- [ ] `P0` Implement ChaCha20-Poly1305 encryption
-  - [ ] Two-key variant (OpenSSH style)
-  - [ ] Encrypt packet_length separately
-  - [ ] Encrypt payload
-  - [ ] Compute Poly1305 MAC
-- [ ] `P0` Implement ChaCha20-Poly1305 decryption
-  - [ ] Decrypt packet_length
-  - [ ] Verify MAC before decryption
-  - [ ] Decrypt payload
-- [ ] `P0` Update `send_packet()` to use encryption
-  - [ ] Increment send sequence number
-- [ ] `P0` Update `recv_packet()` to use decryption
-  - [ ] Increment receive sequence number
-- [ ] `P0` Test: Encrypted packets work with SSH client
+- [x] `P0` Implement ChaCha20-Poly1305 encryption
+  - [x] Two-key variant (OpenSSH style)
+  - [x] Encrypt packet_length separately
+  - [x] Encrypt payload
+  - [x] Compute Poly1305 MAC
+- [x] `P0` Implement ChaCha20-Poly1305 decryption
+  - [x] Decrypt packet_length
+  - [x] Verify MAC before decryption
+  - [x] Decrypt payload
+- [x] `P0` Update `send_packet()` to use encryption
+  - [x] Increment send sequence number
+- [x] `P0` Update `recv_packet()` to use decryption
+  - [x] Increment receive sequence number
+- [x] `P0` Test: Encrypted packets work with SSH client
 
 ### 1.10 Service Request
 

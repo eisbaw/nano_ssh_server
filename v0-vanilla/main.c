@@ -103,6 +103,18 @@ void hash_init(hash_state_t *h) {
     crypto_hash_sha256_init(&h->state);
 }
 
+/*
+ * Encryption state for ChaCha20-Poly1305
+ */
+typedef struct {
+    uint8_t key[32];      /* Encryption key */
+    uint32_t seq_num;     /* Sequence number for nonce */
+    int active;           /* 1 if encryption is active */
+} crypto_state_t;
+
+static crypto_state_t encrypt_state_c2s = {0}; /* Client to server */
+static crypto_state_t encrypt_state_s2c = {0}; /* Server to client */
+
 void hash_update(hash_state_t *h, const uint8_t *data, size_t len) {
     crypto_hash_sha256_update(&h->state, data, len);
 }
@@ -231,17 +243,119 @@ uint8_t calculate_padding(size_t payload_len, size_t block_size) {
     return padding;
 }
 
+/* ======================
+ * ChaCha20-Poly1305 Encryption (OpenSSH variant)
+ * ====================== */
+
 /*
- * Send SSH packet (unencrypted version)
+ * Encrypt SSH packet using ChaCha20-Poly1305 (OpenSSH variant)
+ *
+ * OpenSSH uses a two-key variant:
+ * - K_1 (counter=0): Encrypts packet_length (first 4 bytes)
+ * - K_2 (counter=1): Encrypts rest of packet
+ * - Poly1305 key derived from counter=0
+ * - Nonce: 8 zero bytes + 4-byte sequence number (big-endian)
+ *
+ * Input: unencrypted packet (packet_length || padding_length || payload || padding)
+ * Output: encrypted packet_length || encrypted rest || MAC
+ */
+int chacha20_poly1305_encrypt(uint8_t *packet, size_t packet_len,
+                               const uint8_t key[32], uint32_t seq_num,
+                               uint8_t mac[16])
+{
+    uint8_t nonce[12];
+    uint8_t poly_key[32];
+
+    /* Build nonce: 8 zero bytes + 4-byte sequence number (big-endian) */
+    memset(nonce, 0, 8);
+    write_uint32_be(nonce + 8, seq_num);
+
+    /* Generate Poly1305 key from ChaCha20(key, nonce, counter=0) */
+    memset(poly_key, 0, 32);
+    crypto_stream_chacha20_ietf_xor_ic(poly_key, poly_key, 32, nonce, 0, key);
+
+    /* Encrypt packet_length (first 4 bytes) with counter=0 */
+    crypto_stream_chacha20_ietf_xor_ic(packet, packet, 4, nonce, 0, key);
+
+    /* Encrypt rest of packet with counter=1 */
+    if (packet_len > 4) {
+        crypto_stream_chacha20_ietf_xor_ic(packet + 4, packet + 4, packet_len - 4,
+                                           nonce, 1, key);
+    }
+
+    /* Compute Poly1305 MAC over encrypted packet */
+    crypto_onetimeauth_poly1305(mac, packet, packet_len, poly_key);
+
+    /* Clear sensitive data */
+    memset(poly_key, 0, 32);
+    memset(nonce, 0, 12);
+
+    return 0;
+}
+
+/*
+ * Decrypt SSH packet using ChaCha20-Poly1305 (OpenSSH variant)
+ *
+ * Input: encrypted packet_length || encrypted rest, MAC (separate)
+ * Output: decrypted packet (packet_length || padding_length || payload || padding)
+ * Returns: 0 on success, -1 on MAC verification failure
+ */
+int chacha20_poly1305_decrypt(uint8_t *packet, size_t packet_len,
+                               const uint8_t mac[16],
+                               const uint8_t key[32], uint32_t seq_num)
+{
+    uint8_t nonce[12];
+    uint8_t poly_key[32];
+    int mac_valid;
+
+    /* Build nonce: 8 zero bytes + 4-byte sequence number (big-endian) */
+    memset(nonce, 0, 8);
+    write_uint32_be(nonce + 8, seq_num);
+
+    /* Generate Poly1305 key from ChaCha20(key, nonce, counter=0) */
+    memset(poly_key, 0, 32);
+    crypto_stream_chacha20_ietf_xor_ic(poly_key, poly_key, 32, nonce, 0, key);
+
+    /* Verify Poly1305 MAC over encrypted packet */
+    mac_valid = crypto_onetimeauth_poly1305_verify(mac, packet, packet_len, poly_key);
+
+    /* Clear Poly1305 key */
+    memset(poly_key, 0, 32);
+
+    if (mac_valid != 0) {
+        fprintf(stderr, "Error: MAC verification failed\n");
+        memset(nonce, 0, 12);
+        return -1;
+    }
+
+    /* Decrypt packet_length (first 4 bytes) with counter=0 */
+    crypto_stream_chacha20_ietf_xor_ic(packet, packet, 4, nonce, 0, key);
+
+    /* Decrypt rest of packet with counter=1 */
+    if (packet_len > 4) {
+        crypto_stream_chacha20_ietf_xor_ic(packet + 4, packet + 4, packet_len - 4,
+                                           nonce, 1, key);
+    }
+
+    /* Clear nonce */
+    memset(nonce, 0, 12);
+
+    return 0;
+}
+
+/*
+ * Send SSH packet (supports both encrypted and unencrypted)
  *
  * Packet format:
  *   uint32    packet_length  (length of packet, excluding MAC and this field)
  *   byte      padding_length
  *   byte[n1]  payload
  *   byte[n2]  random padding
+ *   [byte[16] MAC]  (only if encrypted)
  */
 int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     uint8_t packet[MAX_PACKET_SIZE];
+    uint8_t mac[16];
     uint8_t padding_len;
     uint32_t packet_len;
     size_t total_len;
@@ -265,94 +379,251 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     /* Add random padding */
     randombytes_buf(packet + 5 + payload_len, padding_len);
 
-    /* Total length to send */
+    /* Total length of packet (packet_length || padding_length || payload || padding) */
     total_len = 4 + packet_len;
 
-    /* Send packet */
-    if (send_data(fd, packet, total_len) < 0) {
-        fprintf(stderr, "Error: Failed to send packet\n");
-        return -1;
+    /* If encryption is active, encrypt and add MAC */
+    if (encrypt_state_s2c.active) {
+        /* Encrypt packet in-place and generate MAC */
+        if (chacha20_poly1305_encrypt(packet, total_len,
+                                      encrypt_state_s2c.key,
+                                      encrypt_state_s2c.seq_num,
+                                      mac) < 0) {
+            fprintf(stderr, "Error: Encryption failed\n");
+            return -1;
+        }
+
+        /* Send encrypted packet */
+        if (send_data(fd, packet, total_len) < 0) {
+            fprintf(stderr, "Error: Failed to send encrypted packet\n");
+            return -1;
+        }
+
+        /* Send MAC */
+        if (send_data(fd, mac, 16) < 0) {
+            fprintf(stderr, "Error: Failed to send MAC\n");
+            return -1;
+        }
+
+        /* Increment sequence number */
+        encrypt_state_s2c.seq_num++;
+
+    } else {
+        /* Send unencrypted packet */
+        if (send_data(fd, packet, total_len) < 0) {
+            fprintf(stderr, "Error: Failed to send packet\n");
+            return -1;
+        }
     }
 
     return 0;
 }
 
 /*
- * Receive SSH packet (unencrypted version)
+ * Receive SSH packet (supports both encrypted and unencrypted)
  *
  * Returns: payload length on success, -1 on error, 0 on connection close
  * Output: payload buffer filled with packet payload
  */
 ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
     uint8_t header[4];
+    uint8_t mac[16];
     uint32_t packet_len;
     uint8_t padding_len;
     uint8_t *packet_buf;
     size_t payload_len;
+    size_t total_packet_len;
     ssize_t n;
 
-    /* Read packet length (4 bytes) */
-    n = recv_data(fd, header, 4);
-    if (n <= 0) {
-        return n;  /* Error or connection closed */
-    }
-    if (n < 4) {
-        fprintf(stderr, "Error: Incomplete packet length\n");
-        return -1;
-    }
+    if (encrypt_state_c2s.active) {
+        /* ===== ENCRYPTED MODE ===== */
 
-    packet_len = read_uint32_be(header);
+        /* Read encrypted packet length (4 bytes) */
+        n = recv_data(fd, header, 4);
+        if (n <= 0) {
+            return n;  /* Error or connection closed */
+        }
+        if (n < 4) {
+            fprintf(stderr, "Error: Incomplete encrypted packet length\n");
+            return -1;
+        }
 
-    /* Validate packet length */
-    if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
-        fprintf(stderr, "Error: Invalid packet length: %u\n", packet_len);
-        return -1;
-    }
+        /* Read rest of encrypted packet + MAC
+         * We need to read the rest based on decrypted length, but we don't know it yet.
+         * So we need to decrypt the length first, then read the rest.
+         *
+         * For OpenSSH ChaCha20-Poly1305:
+         * - First decrypt packet_length to know how much more to read
+         * - Read (packet_len) more bytes + 16 byte MAC
+         */
 
-    /* Allocate buffer for rest of packet */
-    packet_buf = malloc(packet_len);
-    if (!packet_buf) {
-        fprintf(stderr, "Error: malloc failed\n");
-        return -1;
-    }
+        /* Decrypt packet_length to determine how much to read */
+        {
+            uint8_t nonce[12];
+            memset(nonce, 0, 8);
+            write_uint32_be(nonce + 8, encrypt_state_c2s.seq_num);
+            crypto_stream_chacha20_ietf_xor_ic(header, header, 4, nonce, 0,
+                                                encrypt_state_c2s.key);
+        }
 
-    /* Read rest of packet */
-    n = recv_data(fd, packet_buf, packet_len);
-    if (n <= 0) {
+        packet_len = read_uint32_be(header);
+
+        /* Validate packet length */
+        if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
+            fprintf(stderr, "Error: Invalid decrypted packet length: %u\n", packet_len);
+            return -1;
+        }
+
+        /* Allocate buffer for: encrypted_length + rest_of_packet */
+        total_packet_len = 4 + packet_len;
+        packet_buf = malloc(total_packet_len);
+        if (!packet_buf) {
+            fprintf(stderr, "Error: malloc failed\n");
+            return -1;
+        }
+
+        /* Put encrypted length back into buffer (for MAC verification) */
+        crypto_stream_chacha20_ietf_xor_ic(header, header, 4,
+                                            (uint8_t[]){0,0,0,0,0,0,0,0,
+                                                       (encrypt_state_c2s.seq_num >> 24) & 0xFF,
+                                                       (encrypt_state_c2s.seq_num >> 16) & 0xFF,
+                                                       (encrypt_state_c2s.seq_num >> 8) & 0xFF,
+                                                       encrypt_state_c2s.seq_num & 0xFF},
+                                            0, encrypt_state_c2s.key);
+        memcpy(packet_buf, header, 4);
+
+        /* Read rest of encrypted packet */
+        n = recv_data(fd, packet_buf + 4, packet_len);
+        if (n <= 0) {
+            free(packet_buf);
+            return n;
+        }
+        if (n < (ssize_t)packet_len) {
+            fprintf(stderr, "Error: Incomplete encrypted packet: got %zd, expected %u\n",
+                    n, packet_len);
+            free(packet_buf);
+            return -1;
+        }
+
+        /* Read MAC (16 bytes) */
+        n = recv_data(fd, mac, 16);
+        if (n <= 0) {
+            free(packet_buf);
+            return n;
+        }
+        if (n < 16) {
+            fprintf(stderr, "Error: Incomplete MAC\n");
+            free(packet_buf);
+            return -1;
+        }
+
+        /* Decrypt and verify MAC */
+        if (chacha20_poly1305_decrypt(packet_buf, total_packet_len, mac,
+                                      encrypt_state_c2s.key,
+                                      encrypt_state_c2s.seq_num) < 0) {
+            fprintf(stderr, "Error: Decryption failed\n");
+            free(packet_buf);
+            return -1;
+        }
+
+        /* Increment sequence number */
+        encrypt_state_c2s.seq_num++;
+
+        /* Now packet_buf contains decrypted: packet_length || padding_length || payload || padding */
+        /* Extract padding length (first byte after packet_length) */
+        padding_len = packet_buf[4];
+
+        /* Calculate payload length */
+        if (padding_len >= packet_len - 1) {
+            fprintf(stderr, "Error: Invalid padding length: %u\n", padding_len);
+            free(packet_buf);
+            return -1;
+        }
+
+        payload_len = packet_len - 1 - padding_len;
+
+        /* Check payload buffer size */
+        if (payload_len > payload_max) {
+            fprintf(stderr, "Error: Payload too large: %zu (max %zu)\n",
+                    payload_len, payload_max);
+            free(packet_buf);
+            return -1;
+        }
+
+        /* Copy payload */
+        memcpy(payload, packet_buf + 5, payload_len);
+
         free(packet_buf);
-        return n;
-    }
-    if (n < (ssize_t)packet_len) {
-        fprintf(stderr, "Error: Incomplete packet: got %zd, expected %u\n", n, packet_len);
+
+        return payload_len;
+
+    } else {
+        /* ===== UNENCRYPTED MODE ===== */
+
+        /* Read packet length (4 bytes) */
+        n = recv_data(fd, header, 4);
+        if (n <= 0) {
+            return n;  /* Error or connection closed */
+        }
+        if (n < 4) {
+            fprintf(stderr, "Error: Incomplete packet length\n");
+            return -1;
+        }
+
+        packet_len = read_uint32_be(header);
+
+        /* Validate packet length */
+        if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
+            fprintf(stderr, "Error: Invalid packet length: %u\n", packet_len);
+            return -1;
+        }
+
+        /* Allocate buffer for rest of packet */
+        packet_buf = malloc(packet_len);
+        if (!packet_buf) {
+            fprintf(stderr, "Error: malloc failed\n");
+            return -1;
+        }
+
+        /* Read rest of packet */
+        n = recv_data(fd, packet_buf, packet_len);
+        if (n <= 0) {
+            free(packet_buf);
+            return n;
+        }
+        if (n < (ssize_t)packet_len) {
+            fprintf(stderr, "Error: Incomplete packet: got %zd, expected %u\n", n, packet_len);
+            free(packet_buf);
+            return -1;
+        }
+
+        /* Extract padding length */
+        padding_len = packet_buf[0];
+
+        /* Calculate payload length */
+        if (padding_len >= packet_len - 1) {
+            fprintf(stderr, "Error: Invalid padding length: %u\n", padding_len);
+            free(packet_buf);
+            return -1;
+        }
+
+        payload_len = packet_len - 1 - padding_len;
+
+        /* Check payload buffer size */
+        if (payload_len > payload_max) {
+            fprintf(stderr, "Error: Payload too large: %zu (max %zu)\n",
+                    payload_len, payload_max);
+            free(packet_buf);
+            return -1;
+        }
+
+        /* Copy payload */
+        memcpy(payload, packet_buf + 1, payload_len);
+
         free(packet_buf);
-        return -1;
+
+        return payload_len;
     }
-
-    /* Extract padding length */
-    padding_len = packet_buf[0];
-
-    /* Calculate payload length */
-    if (padding_len >= packet_len - 1) {
-        fprintf(stderr, "Error: Invalid padding length: %u\n", padding_len);
-        free(packet_buf);
-        return -1;
-    }
-
-    payload_len = packet_len - 1 - padding_len;
-
-    /* Check payload buffer size */
-    if (payload_len > payload_max) {
-        fprintf(stderr, "Error: Payload too large: %zu (max %zu)\n", payload_len, payload_max);
-        free(packet_buf);
-        return -1;
-    }
-
-    /* Copy payload */
-    memcpy(payload, packet_buf + 1, payload_len);
-
-    free(packet_buf);
-
-    return payload_len;
 }
 
 /* ======================
@@ -974,16 +1245,26 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     printf("[+] Received SSH_MSG_NEWKEYS\n");
 
-    /* TODO: Activate encryption (Phase 1.9)
-     * From this point forward, all packets must be encrypted with ChaCha20-Poly1305
-     * Need to:
-     * 1. Initialize ChaCha20-Poly1305 state for both directions
-     * 2. Track sequence numbers for MAC
-     * 3. Modify send_packet() and recv_packet() to use encryption
-     */
+    /* ======================
+     * Phase 1.9: Activate Encryption
+     * ====================== */
 
-    printf("[+] Key exchange and derivation complete!\n");
-    printf("[!] Encryption not yet activated - Phase 1.9 needed\n");
+    /* Initialize encryption state for both directions */
+
+    /* Client to server (incoming) */
+    memcpy(encrypt_state_c2s.key, key_c2s, 32);
+    encrypt_state_c2s.seq_num = 0;
+    encrypt_state_c2s.active = 1;
+
+    /* Server to client (outgoing) */
+    memcpy(encrypt_state_s2c.key, key_s2c, 32);
+    encrypt_state_s2c.seq_num = 0;
+    encrypt_state_s2c.active = 1;
+
+    printf("[+] Encryption activated (ChaCha20-Poly1305)\n");
+    printf("    Send sequence: %u\n", encrypt_state_s2c.seq_num);
+    printf("    Recv sequence: %u\n", encrypt_state_c2s.seq_num);
+    printf("[+] Key exchange complete!\n");
 
     /* TODO: Implement remaining SSH protocol
      *
