@@ -240,20 +240,21 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.11 Authentication
 
-- [ ] `P0` Receive SSH_MSG_USERAUTH_REQUEST (50)
-  - [ ] Parse username
-  - [ ] Parse service name
-  - [ ] Parse method name
-  - [ ] If method == "password":
-    - [ ] Parse change_password boolean
-    - [ ] Parse password string
-- [ ] `P0` Implement password verification
-  - [ ] Hardcoded credentials: user="user", pass="password123"
-  - [ ] Compare with received credentials
-- [ ] `P0` Send SSH_MSG_USERAUTH_SUCCESS (52) on match
-- [ ] `P0` Send SSH_MSG_USERAUTH_FAILURE (51) on mismatch
-- [ ] `P0` Test: Correct password authenticates
-- [ ] `P0` Test: Wrong password rejected
+- [x] `P0` Receive SSH_MSG_USERAUTH_REQUEST (50)
+  - [x] Parse username
+  - [x] Parse service name
+  - [x] Parse method name
+  - [x] If method == "password":
+    - [x] Parse change_password boolean
+    - [x] Parse password string
+- [x] `P0` Implement password verification
+  - [x] Hardcoded credentials: user="user", pass="password123"
+  - [x] Compare with received credentials
+- [x] `P0` Send SSH_MSG_USERAUTH_SUCCESS (52) on match
+- [x] `P0` Send SSH_MSG_USERAUTH_FAILURE (51) on mismatch
+- [x] `P0` Test: Correct password authenticates
+- [x] `P0` Test: Wrong password rejected
+- [x] `P0` Handle multiple authentication attempts (e.g., "none" then "password")
 
 ### 1.12 Channel Open
 

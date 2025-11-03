@@ -41,7 +41,8 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 /* SSH protocol constants */
 #define MAX_PACKET_SIZE 35000  /* RFC 4253: maximum packet size */
 #define MIN_PADDING 4          /* Minimum padding bytes */
-#define BLOCK_SIZE 8           /* Block size before encryption (default) */
+#define BLOCK_SIZE_UNENCRYPTED 8   /* Block size before encryption */
+#define BLOCK_SIZE_AES_CTR 16      /* Block size for AES-CTR (cipher block size) */
 
 /* SSH message type constants (RFC 4253) */
 #define SSH_MSG_DISCONNECT                1
@@ -122,6 +123,7 @@ typedef struct {
     uint8_t enc_key[16];  /* AES-128 encryption key */
     uint8_t mac_key[32];  /* HMAC-SHA256 key */
     uint32_t seq_num;     /* Sequence number for MAC */
+    EVP_CIPHER_CTX *ctx;  /* Persistent cipher context - reused across packets */
     int active;           /* 1 if encryption is active */
 } crypto_state_t;
 
@@ -420,41 +422,23 @@ void compute_hmac_sha256(uint8_t *mac, const uint8_t *key,
  * 3. Send encrypted_packet || MAC
  *
  * Note: MAC is computed over UNENCRYPTED packet per RFC 4253
+ * IMPORTANT: Reuses persistent cipher context - counter increments automatically
  */
 int aes_ctr_hmac_encrypt(uint8_t *packet, size_t packet_len,
                          crypto_state_t *state, uint8_t *mac)
 {
     int len;
-    uint8_t iv_for_packet[16];
 
     /* First, compute MAC over unencrypted packet */
     compute_hmac_sha256(mac, state->mac_key, state->seq_num, packet, packet_len);
 
-    /* Create fresh cipher context for this packet (to reset counter) */
-    EVP_CIPHER_CTX *pkt_ctx = EVP_CIPHER_CTX_new();
-    if (!pkt_ctx) {
-        fprintf(stderr, "Error: EVP_CIPHER_CTX_new failed\n");
-        return -1;
-    }
-
-    /* For AES-CTR in SSH, use the same IV for all packets */
-    memcpy(iv_for_packet, state->iv, 16);
-
-    if (!EVP_EncryptInit_ex(pkt_ctx, EVP_aes_128_ctr(), NULL,
-                            state->enc_key, iv_for_packet)) {
-        fprintf(stderr, "Error: EVP_EncryptInit_ex failed\n");
-        EVP_CIPHER_CTX_free(pkt_ctx);
-        return -1;
-    }
-
-    /* Encrypt packet in-place using AES-128-CTR */
-    if (!EVP_EncryptUpdate(pkt_ctx, packet, &len, packet, packet_len)) {
+    /* Encrypt packet in-place using persistent cipher context
+     * The CTR counter automatically increments across calls */
+    if (!EVP_EncryptUpdate(state->ctx, packet, &len, packet, packet_len)) {
         fprintf(stderr, "Error: EVP_EncryptUpdate failed\n");
-        EVP_CIPHER_CTX_free(pkt_ctx);
         return -1;
     }
 
-    EVP_CIPHER_CTX_free(pkt_ctx);
     return 0;
 }
 
@@ -474,14 +458,19 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     uint8_t padding_len;
     uint32_t packet_len;
     size_t total_len;
+    size_t block_size;
 
     if (payload_len > MAX_PACKET_SIZE - 256) {
         fprintf(stderr, "Error: Payload too large: %zu\n", payload_len);
         return -1;
     }
 
+    /* Determine block size based on encryption state
+     * RFC 4253: packet must be multiple of cipher block size (or 8, whichever is larger) */
+    block_size = encrypt_state_s2c.active ? BLOCK_SIZE_AES_CTR : BLOCK_SIZE_UNENCRYPTED;
+
     /* Calculate padding */
-    padding_len = calculate_padding(payload_len, BLOCK_SIZE);
+    padding_len = calculate_padding(payload_len, block_size);
 
     /* Calculate packet length (excluding packet_length field itself) */
     packet_len = 1 + payload_len + padding_len;
@@ -563,47 +552,19 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 
         /* Decrypt first block to extract packet_length */
         uint8_t decrypted_block[16];
-        uint8_t iv_for_packet[16];
         int len;
-
-        /* For AES-CTR in SSH, use the same IV for all packets */
-        memcpy(iv_for_packet, encrypt_state_c2s.iv, 16);
 
         printf("[DEBUG] Seq=%u\n", encrypt_state_c2s.seq_num);
         printf("  Encrypted (16 bytes): ");
         for (int i = 0; i < 16; i++) printf("%02x", first_block[i]);
-        printf("\n  IV: ");
-        for (int i = 0; i < 16; i++) printf("%02x", iv_for_packet[i]);
-        printf("\n  Key: ");
-        for (int i = 0; i < 16; i++) printf("%02x", encrypt_state_c2s.enc_key[i]);
         printf("\n");
 
-        /* Create fresh cipher context for this packet */
-        EVP_CIPHER_CTX *pkt_ctx = EVP_CIPHER_CTX_new();
-        if (!pkt_ctx) {
-            fprintf(stderr, "Error: EVP_CIPHER_CTX_new failed\n");
-            return -1;
-        }
-
-        if (!EVP_DecryptInit_ex(pkt_ctx, EVP_aes_128_ctr(), NULL,
-                                encrypt_state_c2s.enc_key, iv_for_packet)) {
-            fprintf(stderr, "Error: EVP_DecryptInit_ex failed\n");
-            EVP_CIPHER_CTX_free(pkt_ctx);
-            return -1;
-        }
-        if (!EVP_DecryptUpdate(pkt_ctx, decrypted_block, &len,
+        /* Decrypt first block using persistent cipher context
+         * Counter automatically increments from previous packet */
+        if (!EVP_DecryptUpdate(encrypt_state_c2s.ctx, decrypted_block, &len,
                                first_block, 16)) {
             fprintf(stderr, "Error: EVP_DecryptUpdate failed for first block\n");
-            EVP_CIPHER_CTX_free(pkt_ctx);
             return -1;
-        }
-
-        /* Finalize this decryption operation (though CTR mode doesn't pad) */
-        int final_len;
-        uint8_t final_block[16];
-        if (!EVP_DecryptFinal_ex(pkt_ctx, final_block, &final_len)) {
-            /* CTR mode shouldn't fail here, but check anyway */
-            fprintf(stderr, "Warning: EVP_DecryptFinal_ex failed\n");
         }
 
         printf("  Decrypted: ");
@@ -616,7 +577,6 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
         /* Validate packet length */
         if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
             fprintf(stderr, "Error: Invalid decrypted packet length: %u\n", packet_len);
-            EVP_CIPHER_CTX_free(pkt_ctx);
             return -1;
         }
 
@@ -628,7 +588,6 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
         packet_buf = malloc(total_packet_len);
         if (!packet_buf) {
             fprintf(stderr, "Error: malloc failed\n");
-            EVP_CIPHER_CTX_free(pkt_ctx);
             return -1;
         }
 
@@ -641,7 +600,6 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
             if (!encrypted_remaining) {
                 fprintf(stderr, "Error: malloc failed for remaining\n");
                 free(packet_buf);
-                EVP_CIPHER_CTX_free(pkt_ctx);
                 return -1;
             }
 
@@ -649,32 +607,27 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
             if (n <= 0) {
                 free(encrypted_remaining);
                 free(packet_buf);
-                EVP_CIPHER_CTX_free(pkt_ctx);
                 return n;
             }
             if (n < (ssize_t)remaining) {
                 fprintf(stderr, "Error: Incomplete remaining packet\n");
                 free(encrypted_remaining);
                 free(packet_buf);
-                EVP_CIPHER_CTX_free(pkt_ctx);
                 return -1;
             }
 
-            /* Decrypt remaining bytes (continues from first block's CTR state) */
-            if (!EVP_DecryptUpdate(pkt_ctx, packet_buf + 16, &len,
+            /* Decrypt remaining bytes using persistent context
+             * Counter continues automatically from first block */
+            if (!EVP_DecryptUpdate(encrypt_state_c2s.ctx, packet_buf + 16, &len,
                                    encrypted_remaining, remaining)) {
                 fprintf(stderr, "Error: EVP_DecryptUpdate failed for remaining\n");
                 free(encrypted_remaining);
                 free(packet_buf);
-                EVP_CIPHER_CTX_free(pkt_ctx);
                 return -1;
             }
 
             free(encrypted_remaining);
         }
-
-        /* Done with this packet's cipher context */
-        EVP_CIPHER_CTX_free(pkt_ctx);
 
         /* Read MAC (32 bytes for HMAC-SHA256) */
         n = recv_data(fd, mac, 32);
@@ -1419,6 +1372,23 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     memcpy(encrypt_state_s2c.iv, iv_s2c, 16);
     memcpy(encrypt_state_s2c.enc_key, key_s2c, 16);
     memcpy(encrypt_state_s2c.mac_key, int_key_s2c, 32);
+
+    /* Initialize cipher context ONCE - will be reused for all packets */
+    encrypt_state_s2c.ctx = EVP_CIPHER_CTX_new();
+    if (!encrypt_state_s2c.ctx) {
+        fprintf(stderr, "[-] Error: EVP_CIPHER_CTX_new failed for s2c\n");
+        close(client_fd);
+        return;
+    }
+
+    if (!EVP_EncryptInit_ex(encrypt_state_s2c.ctx, EVP_aes_128_ctr(), NULL,
+                            encrypt_state_s2c.enc_key, encrypt_state_s2c.iv)) {
+        fprintf(stderr, "[-] Error: EVP_EncryptInit_ex failed for s2c\n");
+        EVP_CIPHER_CTX_free(encrypt_state_s2c.ctx);
+        close(client_fd);
+        return;
+    }
+
     /* Sequence numbers start at 0 from first packet.
      * By this point we've sent: KEXINIT(0), KEX_ECDH_REPLY(1), NEWKEYS(2)
      * Next outgoing packet will be seq 3 */
@@ -1445,6 +1415,23 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     memcpy(encrypt_state_c2s.iv, iv_c2s, 16);
     memcpy(encrypt_state_c2s.enc_key, key_c2s, 16);
     memcpy(encrypt_state_c2s.mac_key, int_key_c2s, 32);
+
+    /* Initialize cipher context ONCE - will be reused for all packets */
+    encrypt_state_c2s.ctx = EVP_CIPHER_CTX_new();
+    if (!encrypt_state_c2s.ctx) {
+        fprintf(stderr, "[-] Error: EVP_CIPHER_CTX_new failed for c2s\n");
+        close(client_fd);
+        return;
+    }
+
+    if (!EVP_DecryptInit_ex(encrypt_state_c2s.ctx, EVP_aes_128_ctr(), NULL,
+                            encrypt_state_c2s.enc_key, encrypt_state_c2s.iv)) {
+        fprintf(stderr, "[-] Error: EVP_DecryptInit_ex failed for c2s\n");
+        EVP_CIPHER_CTX_free(encrypt_state_c2s.ctx);
+        close(client_fd);
+        return;
+    }
+
     /* By this point we've received: KEXINIT(0), KEX_ECDH_INIT(1), NEWKEYS(2)
      * Next incoming packet will be seq 3 */
     encrypt_state_c2s.seq_num = 3;
@@ -1526,20 +1513,23 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     char method[256];
     char password[256];
     uint8_t change_password;
+    int authenticated = 0;
 
-    /* Receive SSH_MSG_USERAUTH_REQUEST */
-    userauth_request_len = recv_packet(client_fd, userauth_request, sizeof(userauth_request));
-    if (userauth_request_len <= 0) {
-        fprintf(stderr, "[-] Failed to receive USERAUTH_REQUEST\n");
-        close(client_fd);
-        return;
-    }
+    /* Authentication loop - allow multiple attempts */
+    while (!authenticated) {
+        /* Receive SSH_MSG_USERAUTH_REQUEST */
+        userauth_request_len = recv_packet(client_fd, userauth_request, sizeof(userauth_request));
+        if (userauth_request_len <= 0) {
+            fprintf(stderr, "[-] Failed to receive USERAUTH_REQUEST\n");
+            close(client_fd);
+            return;
+        }
 
-    if (userauth_request[0] != SSH_MSG_USERAUTH_REQUEST) {
-        fprintf(stderr, "[-] Expected USERAUTH_REQUEST (50), got %d\n", userauth_request[0]);
-        close(client_fd);
-        return;
-    }
+        if (userauth_request[0] != SSH_MSG_USERAUTH_REQUEST) {
+            fprintf(stderr, "[-] Expected USERAUTH_REQUEST (50), got %d\n", userauth_request[0]);
+            close(client_fd);
+            return;
+        }
 
     /* Parse USERAUTH_REQUEST:
      * byte      SSH_MSG_USERAUTH_REQUEST (50)
@@ -1635,9 +1625,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
                 return;
             }
             printf("[+] Sent SSH_MSG_USERAUTH_SUCCESS\n");
-
-            /* TODO: Continue with channel open, shell, etc. (Phase 1.12+) */
-            printf("[+] Authentication complete, TODO: implement channel open\n");
+            authenticated = 1;  /* Exit authentication loop */
         } else {
             /* Authentication failed */
             printf("[-] Authentication failed: invalid credentials\n");
@@ -1662,7 +1650,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
             printf("[+] Sent SSH_MSG_USERAUTH_FAILURE\n");
         }
     } else {
-        /* Unsupported authentication method */
+        /* Unsupported authentication method (e.g., "none") */
         fprintf(stderr, "[-] Unsupported auth method: %s\n", method);
 
         /* Send SSH_MSG_USERAUTH_FAILURE */
@@ -1683,10 +1671,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
             return;
         }
         printf("[+] Sent SSH_MSG_USERAUTH_FAILURE (unsupported method)\n");
+        /* Continue loop - wait for another auth attempt */
     }
+    }  /* End authentication loop */
+
+    /* Authentication successful - continue with channel open, shell, etc. */
+    printf("[+] Authentication complete, TODO: implement channel open (Phase 1.12+)\n");
 
     printf("[+] Closing connection\n");
-
     close(client_fd);
 }
 
