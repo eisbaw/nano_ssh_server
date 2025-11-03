@@ -25,8 +25,9 @@ pkgs.mkShell {
     xxd
     coreutils
 
-    # Cryptography library (TweetNaCl via libsodium)
-    libsodium
+    # Cryptography libraries
+    libsodium    # For Curve25519, Ed25519, HMAC-SHA256
+    openssl      # For AES-128-CTR
 
     # Network tools for debugging
     tcpdump

@@ -22,6 +22,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sodium.h>
+#include <openssl/evp.h>
+#include <openssl/aes.h>
 
 /* Forward declarations */
 ssize_t send_data(int fd, const void *buf, size_t len);
@@ -71,10 +73,14 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 /* Algorithm names for KEXINIT */
 #define KEX_ALGORITHM           "curve25519-sha256"
 #define HOST_KEY_ALGORITHM      "ssh-ed25519"
-#define ENCRYPTION_ALGORITHM    "chacha20-poly1305@openssh.com"
-#define MAC_ALGORITHM           ""    /* Not needed with AEAD */
+#define ENCRYPTION_ALGORITHM    "aes128-ctr"      /* AES-128 in CTR mode */
+#define MAC_ALGORITHM           "hmac-sha2-256"   /* HMAC-SHA256 for packet authentication */
 #define COMPRESSION_ALGORITHM   "none"
 #define LANGUAGE                ""
+
+/* NOTE: Using AES-128-CTR + HMAC-SHA256 instead of ChaCha20-Poly1305@openssh.com
+ * because the OpenSSH Poly1305 variant proved too complex to debug. AES-128-CTR is
+ * a standard, widely-supported SSH cipher with simpler implementation. */
 
 /* ======================
  * Cryptography Helper Functions
@@ -104,15 +110,19 @@ void hash_init(hash_state_t *h) {
 }
 
 /*
- * Encryption state for ChaCha20-Poly1305 (OpenSSH variant)
+ * Encryption state for AES-128-CTR + HMAC-SHA256
  *
- * OpenSSH ChaCha20-Poly1305 requires 512 bits (64 bytes) of key material:
- * - K_1 (first 32 bytes): encrypts packet length
- * - K_2 (last 32 bytes): encrypts payload and generates Poly1305 key
+ * Key material needed:
+ * - IV: 16 bytes (initial counter value for CTR mode)
+ * - Encryption key: 16 bytes (AES-128)
+ * - MAC key: 32 bytes (HMAC-SHA256)
  */
 typedef struct {
-    uint8_t key[64];      /* Encryption key: K_1 || K_2 */
-    uint32_t seq_num;     /* Sequence number for nonce */
+    uint8_t iv[16];       /* IV for AES-128-CTR */
+    uint8_t enc_key[16];  /* AES-128 encryption key */
+    uint8_t mac_key[32];  /* HMAC-SHA256 key */
+    uint32_t seq_num;     /* Sequence number for MAC */
+    EVP_CIPHER_CTX *ctx;  /* OpenSSL cipher context */
     int active;           /* 1 if encryption is active */
 } crypto_state_t;
 
@@ -372,6 +382,116 @@ int chacha20_poly1305_decrypt(uint8_t *packet, size_t packet_len,
     return 0;
 }
 
+/* ======================
+ * ChaCha20-IETF + HMAC-SHA256 Encryption (CURRENT IMPLEMENTATION)
+ * ====================== */
+
+/*
+ * Compute HMAC-SHA256
+ *
+ * RFC 4253: MAC = HMAC(key, sequence_number || unencrypted_packet)
+ * where sequence_number is uint32 big-endian
+ */
+void compute_hmac_sha256(uint8_t *mac, const uint8_t *key,
+                         uint32_t seq_num, const uint8_t *packet, size_t packet_len)
+{
+    crypto_auth_hmacsha256_state state;
+    uint8_t seq_buf[4];
+
+    /* Initialize HMAC state with key */
+    crypto_auth_hmacsha256_init(&state, key, 32);
+
+    /* Add sequence number (big-endian) */
+    write_uint32_be(seq_buf, seq_num);
+    crypto_auth_hmacsha256_update(&state, seq_buf, 4);
+
+    /* Add packet data */
+    crypto_auth_hmacsha256_update(&state, packet, packet_len);
+
+    /* Finalize - produces 32-byte MAC */
+    crypto_auth_hmacsha256_final(&state, mac);
+}
+
+/*
+ * Encrypt SSH packet using AES-128-CTR + HMAC-SHA256
+ *
+ * SSH packet encryption (RFC 4253):
+ * 1. Compute MAC over unencrypted packet (seq || packet)
+ * 2. Encrypt packet with AES-128-CTR
+ * 3. Send encrypted_packet || MAC
+ *
+ * Note: MAC is computed over UNENCRYPTED packet per RFC 4253
+ */
+int aes_ctr_hmac_encrypt(uint8_t *packet, size_t packet_len,
+                         crypto_state_t *state, uint8_t *mac)
+{
+    int len;
+    uint8_t iv_copy[16];
+
+    /* First, compute MAC over unencrypted packet */
+    compute_hmac_sha256(mac, state->mac_key, state->seq_num, packet, packet_len);
+
+    /* Initialize cipher context for this packet (CTR mode) */
+    memcpy(iv_copy, state->iv, 16);  /* Copy IV to avoid modifying original */
+
+    if (!EVP_EncryptInit_ex(state->ctx, EVP_aes_128_ctr(), NULL,
+                            state->enc_key, iv_copy)) {
+        fprintf(stderr, "Error: EVP_EncryptInit_ex failed\n");
+        return -1;
+    }
+
+    /* Encrypt packet in-place using AES-128-CTR */
+    if (!EVP_EncryptUpdate(state->ctx, packet, &len, packet, packet_len)) {
+        fprintf(stderr, "Error: EVP_EncryptUpdate failed\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Decrypt SSH packet using AES-128-CTR + HMAC-SHA256
+ *
+ * SSH packet decryption (RFC 4253):
+ * 1. Decrypt packet with AES-128-CTR
+ * 2. Verify MAC = HMAC-SHA256(seq || decrypted_packet)
+ * 3. Return decrypted packet if MAC valid
+ */
+int aes_ctr_hmac_decrypt(uint8_t *packet, size_t packet_len,
+                         const uint8_t *received_mac,
+                         crypto_state_t *state)
+{
+    uint8_t computed_mac[32];
+    int len;
+    uint8_t iv_copy[16];
+
+    /* Initialize cipher context for this packet (CTR mode) */
+    memcpy(iv_copy, state->iv, 16);  /* Copy IV to avoid modifying original */
+
+    if (!EVP_DecryptInit_ex(state->ctx, EVP_aes_128_ctr(), NULL,
+                            state->enc_key, iv_copy)) {
+        fprintf(stderr, "Error: EVP_DecryptInit_ex failed\n");
+        return -1;
+    }
+
+    /* Decrypt packet in-place (CTR mode decrypt = encrypt) */
+    if (!EVP_DecryptUpdate(state->ctx, packet, &len, packet, packet_len)) {
+        fprintf(stderr, "Error: EVP_DecryptUpdate failed\n");
+        return -1;
+    }
+
+    /* Compute MAC over decrypted packet */
+    compute_hmac_sha256(computed_mac, state->mac_key, state->seq_num, packet, packet_len);
+
+    /* Verify MAC (constant-time comparison) */
+    if (crypto_verify_32(computed_mac, received_mac) != 0) {
+        fprintf(stderr, "Error: HMAC verification failed\n");
+        return -1;
+    }
+
+    return 0;
+}
+
 /*
  * Send SSH packet (supports both encrypted and unencrypted)
  *
@@ -384,7 +504,7 @@ int chacha20_poly1305_decrypt(uint8_t *packet, size_t packet_len,
  */
 int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     uint8_t packet[MAX_PACKET_SIZE];
-    uint8_t mac[16];
+    uint8_t mac[32];  /* HMAC-SHA256 produces 32-byte MAC */
     uint8_t padding_len;
     uint32_t packet_len;
     size_t total_len;
@@ -413,11 +533,8 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
 
     /* If encryption is active, encrypt and add MAC */
     if (encrypt_state_s2c.active) {
-        /* Encrypt packet in-place and generate MAC */
-        if (chacha20_poly1305_encrypt(packet, total_len,
-                                      encrypt_state_s2c.key,
-                                      encrypt_state_s2c.seq_num,
-                                      mac) < 0) {
+        /* Encrypt packet in-place and generate HMAC */
+        if (aes_ctr_hmac_encrypt(packet, total_len, &encrypt_state_s2c, mac) < 0) {
             fprintf(stderr, "Error: Encryption failed\n");
             return -1;
         }
@@ -428,8 +545,8 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
             return -1;
         }
 
-        /* Send MAC */
-        if (send_data(fd, mac, 16) < 0) {
+        /* Send MAC (32 bytes for HMAC-SHA256) */
+        if (send_data(fd, mac, 32) < 0) {
             fprintf(stderr, "Error: Failed to send MAC\n");
             return -1;
         }
@@ -456,7 +573,7 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
  */
 ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
     uint8_t header[4];
-    uint8_t mac[16];
+    uint8_t mac[32];  /* HMAC-SHA256 produces 32-byte MAC */
     uint32_t packet_len;
     uint8_t padding_len;
     uint8_t *packet_buf;
@@ -465,41 +582,37 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
     ssize_t n;
 
     if (encrypt_state_c2s.active) {
-        /* ===== ENCRYPTED MODE ===== */
+        /* ===== ENCRYPTED MODE (AES-128-CTR + HMAC-SHA256) ===== */
 
-        /* Read encrypted packet length (4 bytes) */
-        n = recv_data(fd, header, 4);
+        /* For AES-CTR, read first block (16 bytes) which contains packet_length */
+        uint8_t first_block[16];
+        n = recv_data(fd, first_block, 16);
         if (n <= 0) {
             return n;  /* Error or connection closed */
         }
-        if (n < 4) {
-            fprintf(stderr, "Error: Incomplete encrypted packet length\n");
+        if (n < 16) {
+            fprintf(stderr, "Error: Incomplete first block\n");
             return -1;
         }
 
-        /* Read rest of encrypted packet + MAC
-         * We need to read the rest based on decrypted length, but we don't know it yet.
-         * So we need to decrypt the length first, then read the rest.
-         *
-         * For OpenSSH ChaCha20-Poly1305:
-         * - First decrypt packet_length to know how much more to read
-         * - Read (packet_len) more bytes + 16 byte MAC
-         */
+        /* Decrypt first block to extract packet_length */
+        uint8_t decrypted_block[16];
+        uint8_t iv_copy[16];
+        int len;
 
-        /* Decrypt packet_length to determine how much to read */
-        printf("[DEBUG] Encrypted packet_length: %02x %02x %02x %02x\n",
-               header[0], header[1], header[2], header[3]);
-        printf("[DEBUG] Using K_1 (first 32 bytes of key), seq=%u\n", encrypt_state_c2s.seq_num);
-        {
-            uint8_t nonce[12];
-            memset(nonce, 0, 4);
-            write_uint64_be(nonce + 4, (uint64_t)encrypt_state_c2s.seq_num);
-            crypto_stream_chacha20_ietf_xor_ic(header, header, 4, nonce, 0,
-                                                encrypt_state_c2s.key);
+        memcpy(iv_copy, encrypt_state_c2s.iv, 16);
+        if (!EVP_DecryptInit_ex(encrypt_state_c2s.ctx, EVP_aes_128_ctr(), NULL,
+                                encrypt_state_c2s.enc_key, iv_copy)) {
+            fprintf(stderr, "Error: EVP_DecryptInit_ex failed\n");
+            return -1;
+        }
+        if (!EVP_DecryptUpdate(encrypt_state_c2s.ctx, decrypted_block, &len,
+                               first_block, 16)) {
+            fprintf(stderr, "Error: EVP_DecryptUpdate failed for first block\n");
+            return -1;
         }
 
-        packet_len = read_uint32_be(header);
-        printf("[DEBUG] Decrypted packet_length: %u (0x%08x)\n", packet_len, packet_len);
+        packet_len = read_uint32_be(decrypted_block);
 
         /* Validate packet length */
         if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
@@ -507,54 +620,73 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
             return -1;
         }
 
-        /* Allocate buffer for: encrypted_length + rest_of_packet */
+        /* Calculate total packet size and remaining bytes to read */
         total_packet_len = 4 + packet_len;
+        size_t remaining = total_packet_len - 16;  /* Already read 16 bytes */
+
+        /* Allocate buffer for full decrypted packet */
         packet_buf = malloc(total_packet_len);
         if (!packet_buf) {
             fprintf(stderr, "Error: malloc failed\n");
             return -1;
         }
 
-        /* Put encrypted length back into buffer (for MAC verification) */
-        {
-            uint8_t nonce_reenc[12];
-            memset(nonce_reenc, 0, 4);
-            write_uint64_be(nonce_reenc + 4, (uint64_t)encrypt_state_c2s.seq_num);
-            crypto_stream_chacha20_ietf_xor_ic(header, header, 4, nonce_reenc, 0,
-                                                encrypt_state_c2s.key);
-        }
-        memcpy(packet_buf, header, 4);
+        /* Copy decrypted first block */
+        memcpy(packet_buf, decrypted_block, 16);
 
-        /* Read rest of encrypted packet */
-        n = recv_data(fd, packet_buf + 4, packet_len);
+        /* Read and decrypt remaining packet bytes */
+        if (remaining > 0) {
+            uint8_t *encrypted_remaining = malloc(remaining);
+            if (!encrypted_remaining) {
+                fprintf(stderr, "Error: malloc failed for remaining\n");
+                free(packet_buf);
+                return -1;
+            }
+
+            n = recv_data(fd, encrypted_remaining, remaining);
+            if (n <= 0) {
+                free(encrypted_remaining);
+                free(packet_buf);
+                return n;
+            }
+            if (n < (ssize_t)remaining) {
+                fprintf(stderr, "Error: Incomplete remaining packet\n");
+                free(encrypted_remaining);
+                free(packet_buf);
+                return -1;
+            }
+
+            /* Decrypt remaining bytes (continues from first block's CTR state) */
+            if (!EVP_DecryptUpdate(encrypt_state_c2s.ctx, packet_buf + 16, &len,
+                                   encrypted_remaining, remaining)) {
+                fprintf(stderr, "Error: EVP_DecryptUpdate failed for remaining\n");
+                free(encrypted_remaining);
+                free(packet_buf);
+                return -1;
+            }
+
+            free(encrypted_remaining);
+        }
+
+        /* Read MAC (32 bytes for HMAC-SHA256) */
+        n = recv_data(fd, mac, 32);
         if (n <= 0) {
             free(packet_buf);
             return n;
         }
-        if (n < (ssize_t)packet_len) {
-            fprintf(stderr, "Error: Incomplete encrypted packet: got %zd, expected %u\n",
-                    n, packet_len);
-            free(packet_buf);
-            return -1;
-        }
-
-        /* Read MAC (16 bytes) */
-        n = recv_data(fd, mac, 16);
-        if (n <= 0) {
-            free(packet_buf);
-            return n;
-        }
-        if (n < 16) {
+        if (n < 32) {
             fprintf(stderr, "Error: Incomplete MAC\n");
             free(packet_buf);
             return -1;
         }
 
-        /* Decrypt and verify MAC */
-        if (chacha20_poly1305_decrypt(packet_buf, total_packet_len, mac,
-                                      encrypt_state_c2s.key,
-                                      encrypt_state_c2s.seq_num) < 0) {
-            fprintf(stderr, "Error: Decryption failed\n");
+        /* Verify MAC over decrypted packet (including packet_length) */
+        uint8_t computed_mac[32];
+        compute_hmac_sha256(computed_mac, encrypt_state_c2s.mac_key,
+                           encrypt_state_c2s.seq_num, packet_buf, total_packet_len);
+
+        if (crypto_verify_32(computed_mac, mac) != 0) {
+            fprintf(stderr, "Error: HMAC verification failed\n");
             free(packet_buf);
             return -1;
         }
@@ -1225,30 +1357,33 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
      * Phase 1.7: Key Derivation
      * ====================== */
 
-    uint8_t iv_c2s[12];      /* IV client to server (96-bit nonce for ChaCha20) - unused */
-    uint8_t iv_s2c[12];      /* IV server to client - unused */
-    uint8_t key_c2s[64];     /* Encryption key client to server (K_1 || K_2) for ChaCha20-Poly1305 */
-    uint8_t key_s2c[64];     /* Encryption key server to client (K_1 || K_2) for ChaCha20-Poly1305 */
-    uint8_t int_key_c2s[32]; /* Integrity key client to server (unused for ChaCha20-Poly1305) */
-    uint8_t int_key_s2c[32]; /* Integrity key server to client (unused for ChaCha20-Poly1305) */
+    uint8_t iv_c2s[16];      /* IV client to server (AES-128-CTR) */
+    uint8_t iv_s2c[16];      /* IV server to client (AES-128-CTR) */
+    uint8_t key_c2s[16];     /* Encryption key client to server (AES-128) */
+    uint8_t key_s2c[16];     /* Encryption key server to client (AES-128) */
+    uint8_t int_key_c2s[32]; /* Integrity key client to server (HMAC-SHA256) */
+    uint8_t int_key_s2c[32]; /* Integrity key server to client (HMAC-SHA256) */
 
     /* Derive all keys using session_id and exchange_hash
-     * For ChaCha20-Poly1305, we need 64 bytes (512 bits) per direction:
-     * - K_1 (first 32 bytes): encrypts packet length
-     * - K_2 (last 32 bytes): encrypts payload and generates Poly1305 key
+     * For AES-128-CTR + HMAC-SHA256:
+     * - IV: 16 bytes (AES block size, initial counter value)
+     * - Encryption key: 16 bytes (AES-128)
+     * - MAC key: 32 bytes (HMAC-SHA256)
      */
-    derive_key(iv_c2s, 12, shared_secret, 32, exchange_hash, 'A', session_id);
-    derive_key(iv_s2c, 12, shared_secret, 32, exchange_hash, 'B', session_id);
-    derive_key(key_c2s, 64, shared_secret, 32, exchange_hash, 'C', session_id);  /* 64 bytes! */
-    derive_key(key_s2c, 64, shared_secret, 32, exchange_hash, 'D', session_id);  /* 64 bytes! */
+    derive_key(iv_c2s, 16, shared_secret, 32, exchange_hash, 'A', session_id);
+    derive_key(iv_s2c, 16, shared_secret, 32, exchange_hash, 'B', session_id);
+    derive_key(key_c2s, 16, shared_secret, 32, exchange_hash, 'C', session_id);
+    derive_key(key_s2c, 16, shared_secret, 32, exchange_hash, 'D', session_id);
     derive_key(int_key_c2s, 32, shared_secret, 32, exchange_hash, 'E', session_id);
     derive_key(int_key_s2c, 32, shared_secret, 32, exchange_hash, 'F', session_id);
 
     printf("[+] Derived encryption keys:\n");
-    printf("    IV c2s: 12 bytes\n");
-    printf("    IV s2c: 12 bytes\n");
-    printf("    Key c2s: 64 bytes (K_1 || K_2)\n");
-    printf("    Key s2c: 64 bytes (K_1 || K_2)\n");
+    printf("    IV c2s: 16 bytes (AES-128-CTR)\n");
+    printf("    IV s2c: 16 bytes (AES-128-CTR)\n");
+    printf("    Key c2s: 16 bytes (AES-128)\n");
+    printf("    Key s2c: 16 bytes (AES-128)\n");
+    printf("    MAC c2s: 32 bytes (HMAC-SHA256)\n");
+    printf("    MAC s2c: 32 bytes (HMAC-SHA256)\n");
 
     /* ======================
      * Phase 1.8: NEWKEYS Exchange
@@ -1273,8 +1408,19 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
      * Activate encryption for OUTGOING packets immediately after sending NEWKEYS */
-    memcpy(encrypt_state_s2c.key, key_s2c, 64);  /* Copy all 64 bytes (K_1 || K_2) */
-    encrypt_state_s2c.seq_num = 0;
+    encrypt_state_s2c.ctx = EVP_CIPHER_CTX_new();
+    if (!encrypt_state_s2c.ctx) {
+        fprintf(stderr, "[-] Failed to create cipher context for s2c\n");
+        close(client_fd);
+        return;
+    }
+    memcpy(encrypt_state_s2c.iv, iv_s2c, 16);
+    memcpy(encrypt_state_s2c.enc_key, key_s2c, 16);
+    memcpy(encrypt_state_s2c.mac_key, int_key_s2c, 32);
+    /* Sequence numbers start at 0 from first packet.
+     * By this point we've sent: KEXINIT(0), KEX_ECDH_REPLY(1), NEWKEYS(2)
+     * Next outgoing packet will be seq 3 */
+    encrypt_state_s2c.seq_num = 3;
     encrypt_state_s2c.active = 1;
     printf("[+] Activated outgoing encryption (server→client)\n");
 
@@ -1294,18 +1440,22 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     printf("[+] Received SSH_MSG_NEWKEYS\n");
 
     /* Activate encryption for INCOMING packets immediately after receiving NEWKEYS */
-    memcpy(encrypt_state_c2s.key, key_c2s, 64);  /* Copy all 64 bytes (K_1 || K_2) */
-    encrypt_state_c2s.seq_num = 0;
+    encrypt_state_c2s.ctx = EVP_CIPHER_CTX_new();
+    if (!encrypt_state_c2s.ctx) {
+        fprintf(stderr, "[-] Failed to create cipher context for c2s\n");
+        close(client_fd);
+        return;
+    }
+    memcpy(encrypt_state_c2s.iv, iv_c2s, 16);
+    memcpy(encrypt_state_c2s.enc_key, key_c2s, 16);
+    memcpy(encrypt_state_c2s.mac_key, int_key_c2s, 32);
+    /* By this point we've received: KEXINIT(0), KEX_ECDH_INIT(1), NEWKEYS(2)
+     * Next incoming packet will be seq 3 */
+    encrypt_state_c2s.seq_num = 3;
     encrypt_state_c2s.active = 1;
     printf("[+] Activated incoming encryption (client→server)\n");
-    printf("[DEBUG] K_1 (c2s): %02x %02x %02x %02x...\n",
-           encrypt_state_c2s.key[0], encrypt_state_c2s.key[1],
-           encrypt_state_c2s.key[2], encrypt_state_c2s.key[3]);
-    printf("[DEBUG] K_2 (c2s): %02x %02x %02x %02x...\n",
-           encrypt_state_c2s.key[32], encrypt_state_c2s.key[33],
-           encrypt_state_c2s.key[34], encrypt_state_c2s.key[35]);
 
-    printf("[+] Encryption fully activated (ChaCha20-Poly1305)\n");
+    printf("[+] Encryption fully activated (AES-128-CTR + HMAC-SHA256)\n");
     printf("    Send sequence: %u\n", encrypt_state_s2c.seq_num);
     printf("    Recv sequence: %u\n", encrypt_state_c2s.seq_num);
     printf("[+] Key exchange complete!\n");

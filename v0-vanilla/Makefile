@@ -4,7 +4,7 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g -D_POSIX_C_SOURCE=200809L
-LDFLAGS = -lsodium
+LDFLAGS = -lsodium -lcrypto
 
 # Source files (add as you implement)
 SRCS = main.c

@@ -203,20 +203,29 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.9 Encrypted Packet Protocol
 
-- [x] `P0` Implement ChaCha20-Poly1305 encryption
-  - [x] Two-key variant (OpenSSH style)
-  - [x] Encrypt packet_length separately
-  - [x] Encrypt payload
-  - [x] Compute Poly1305 MAC
-- [x] `P0` Implement ChaCha20-Poly1305 decryption
-  - [x] Decrypt packet_length
-  - [x] Verify MAC before decryption
-  - [x] Decrypt payload
-- [x] `P0` Update `send_packet()` to use encryption
-  - [x] Increment send sequence number
-- [x] `P0` Update `recv_packet()` to use decryption
-  - [x] Increment receive sequence number
-- [x] `P0` Test: Encrypted packets work with SSH client
+**NOTE: ChaCha20-Poly1305 implementation has subtle incompatibility with OpenSSH.**
+**Switched to AES-128-CTR + HMAC-SHA256 instead (simpler, widely supported).**
+
+- [!] `P0` ChaCha20-Poly1305 (BUGGY - OpenSSH incompatibility, decryption fails)
+  - [x] Two-key variant (OpenSSH style) - implemented but not working
+  - [x] 64-byte key material (K_1 || K_2) - fixed
+  - [x] Nonce format (4 zeros + uint64 seq) - fixed
+  - [!] Decryption still produces invalid packet lengths
+  - [!] Code preserved in main.c but not used
+
+- [ ] `P0` Implement AES-128-CTR + HMAC-SHA256 (CURRENT APPROACH)
+  - [ ] AES-128-CTR encryption (using libsodium or tiny-AES-c)
+  - [ ] HMAC-SHA256 for packet authentication
+  - [ ] Update KEXINIT to advertise "aes128-ctr" and "hmac-sha2-256"
+- [ ] `P0` Update `send_packet()` to use AES-128-CTR + HMAC
+  - [ ] Encrypt packet with AES-128-CTR
+  - [ ] Compute HMAC-SHA256(seq || packet)
+  - [ ] Increment send sequence number
+- [ ] `P0` Update `recv_packet()` to use AES-128-CTR + HMAC
+  - [ ] Verify HMAC before decryption
+  - [ ] Decrypt packet with AES-128-CTR
+  - [ ] Increment receive sequence number
+- [ ] `P0` Test: Encrypted packets work with SSH client
 
 ### 1.10 Service Request
 

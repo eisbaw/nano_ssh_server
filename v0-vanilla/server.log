@@ -1,0 +1,50 @@
+=================================
+Nano SSH Server v0-vanilla
+=================================
+Port: 2222
+Version: SSH-2.0-NanoSSH_0.1
+Credentials: user / password123
+=================================
+
+[+] Libsodium initialized
+[+] Generated Ed25519 host key pair
+[+] Server socket created and listening on port 2222
+[+] Waiting for connections...
+
+
+[+] Client connected: 127.0.0.1:19034
+[+] Sent version: SSH-2.0-NanoSSH_0.1
+[+] Received version: SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.14
+[+] Version exchange complete
+[+] Built KEXINIT payload (144 bytes)
+[+] Sent KEXINIT
+[+] Received client KEXINIT (1524 bytes)
+[+] KEXINIT exchange complete
+[+] Generated ephemeral key pair
+[+] Built host key blob (51 bytes)
+[+] Received client ephemeral public key (32 bytes)
+[+] Computed shared secret
+[+] Computed exchange hash H
+[+] Set session_id
+[+] Signed exchange hash (signature: 64 bytes)
+[+] Sent KEX_ECDH_REPLY (179 bytes)
+[+] Derived encryption keys:
+    IV c2s: 16 bytes (AES-128-CTR)
+    IV s2c: 16 bytes (AES-128-CTR)
+    Key c2s: 16 bytes (AES-128)
+    Key s2c: 16 bytes (AES-128)
+    MAC c2s: 32 bytes (HMAC-SHA256)
+    MAC s2c: 32 bytes (HMAC-SHA256)
+[+] Sent SSH_MSG_NEWKEYS
+[+] Activated outgoing encryption (server→client)
+[+] Received SSH_MSG_NEWKEYS
+[+] Activated incoming encryption (client→server)
+[+] Encryption fully activated (AES-128-CTR + HMAC-SHA256)
+    Send sequence: 3
+    Recv sequence: 3
+[+] Key exchange complete!
+[+] Received SSH_MSG_SERVICE_REQUEST: ssh-userauth
+[+] Sent SSH_MSG_SERVICE_ACCEPT
+[+] Closing connection
+
+[+] Server shutting down
