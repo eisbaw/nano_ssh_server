@@ -1676,9 +1676,128 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }  /* End authentication loop */
 
     /* Authentication successful - continue with channel open, shell, etc. */
-    printf("[+] Authentication complete, TODO: implement channel open (Phase 1.12+)\n");
+    printf("[+] Authentication complete\n");
 
-    printf("[+] Closing connection\n");
+    /* ======================
+     * Phase 1.12: Channel Open
+     * ====================== */
+
+    uint8_t channel_open_msg[512];
+    ssize_t channel_open_len;
+    uint8_t *ch_ptr;
+    uint32_t channel_type_len;
+    char channel_type[64];
+    uint32_t client_channel_id;
+    uint32_t client_window_size;
+    uint32_t client_max_packet;
+    uint32_t server_channel_id = 0;  /* We assign channel ID 0 */
+    uint32_t server_window_size = 32768;
+    uint32_t server_max_packet = 16384;
+
+    /* Receive SSH_MSG_CHANNEL_OPEN */
+    channel_open_len = recv_packet(client_fd, channel_open_msg, sizeof(channel_open_msg));
+    if (channel_open_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive CHANNEL_OPEN\n");
+        close(client_fd);
+        return;
+    }
+
+    if (channel_open_msg[0] != SSH_MSG_CHANNEL_OPEN) {
+        fprintf(stderr, "[-] Expected CHANNEL_OPEN (90), got %d\n", channel_open_msg[0]);
+        close(client_fd);
+        return;
+    }
+
+    /* Parse SSH_MSG_CHANNEL_OPEN:
+     * byte      SSH_MSG_CHANNEL_OPEN (90)
+     * string    channel_type
+     * uint32    sender_channel (client's channel ID)
+     * uint32    initial_window_size
+     * uint32    maximum_packet_size
+     */
+    ch_ptr = channel_open_msg + 1;
+
+    /* Parse channel type */
+    channel_type_len = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+    if (channel_type_len >= sizeof(channel_type)) {
+        fprintf(stderr, "[-] Channel type too long: %u\n", channel_type_len);
+        close(client_fd);
+        return;
+    }
+    memcpy(channel_type, ch_ptr, channel_type_len);
+    channel_type[channel_type_len] = '\0';
+    ch_ptr += channel_type_len;
+
+    /* Parse sender_channel (client's channel ID) */
+    client_channel_id = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+
+    /* Parse initial_window_size */
+    client_window_size = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+
+    /* Parse maximum_packet_size */
+    client_max_packet = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+
+    printf("[+] Received SSH_MSG_CHANNEL_OPEN:\n");
+    printf("    Channel type: %s\n", channel_type);
+    printf("    Client channel ID: %u\n", client_channel_id);
+    printf("    Client window size: %u\n", client_window_size);
+    printf("    Client max packet: %u\n", client_max_packet);
+
+    /* Verify channel type is "session" */
+    if (strcmp(channel_type, "session") != 0) {
+        fprintf(stderr, "[-] Unsupported channel type: %s\n", channel_type);
+        /* TODO: Send SSH_MSG_CHANNEL_OPEN_FAILURE */
+        close(client_fd);
+        return;
+    }
+
+    /* Build SSH_MSG_CHANNEL_OPEN_CONFIRMATION */
+    uint8_t channel_confirm[256];
+    size_t channel_confirm_len = 0;
+
+    channel_confirm[channel_confirm_len++] = SSH_MSG_CHANNEL_OPEN_CONFIRMATION;
+
+    /* recipient_channel (client's channel ID) */
+    write_uint32_be(channel_confirm + channel_confirm_len, client_channel_id);
+    channel_confirm_len += 4;
+
+    /* sender_channel (server's channel ID) */
+    write_uint32_be(channel_confirm + channel_confirm_len, server_channel_id);
+    channel_confirm_len += 4;
+
+    /* initial_window_size (server's receive window) */
+    write_uint32_be(channel_confirm + channel_confirm_len, server_window_size);
+    channel_confirm_len += 4;
+
+    /* maximum_packet_size (server's max packet) */
+    write_uint32_be(channel_confirm + channel_confirm_len, server_max_packet);
+    channel_confirm_len += 4;
+
+    /* Send SSH_MSG_CHANNEL_OPEN_CONFIRMATION */
+    if (send_packet(client_fd, channel_confirm, channel_confirm_len) < 0) {
+        fprintf(stderr, "[-] Failed to send CHANNEL_OPEN_CONFIRMATION\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_CHANNEL_OPEN_CONFIRMATION:\n");
+    printf("    Server channel ID: %u\n", server_channel_id);
+    printf("    Server window size: %u\n", server_window_size);
+    printf("    Server max packet: %u\n", server_max_packet);
+    printf("[+] Channel opened successfully\n");
+
+    /* Store channel state (for future use in Phase 1.13+) */
+    /* For now, we just have local variables. In a production server, we'd
+     * store this in a channel state structure. */
+
+    /* TODO: Phase 1.13 - Handle channel requests (pty-req, shell, etc.) */
+    /* TODO: Phase 1.14 - Send "Hello World" data */
+    /* TODO: Phase 1.15 - Close channel cleanly */
+
+    printf("[+] Closing connection (TODO: implement channel requests and data transfer)\n");
     close(client_fd);
 }
 

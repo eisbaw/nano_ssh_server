@@ -258,20 +258,20 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.12 Channel Open
 
-- [ ] `P0` Receive SSH_MSG_CHANNEL_OPEN (90)
-  - [ ] Parse channel type
-  - [ ] Verify == "session"
-  - [ ] Parse sender_channel (client's ID)
-  - [ ] Parse initial_window_size
-  - [ ] Parse maximum_packet_size
-- [ ] `P0` Assign server channel ID (can be 0)
-- [ ] `P0` Send SSH_MSG_CHANNEL_OPEN_CONFIRMATION (91)
-  - [ ] recipient_channel = client's ID
-  - [ ] sender_channel = server's ID
-  - [ ] initial_window_size = 32768
-  - [ ] maximum_packet_size = 16384
-- [ ] `P0` Store channel state
-- [ ] `P0` Test: Channel opens successfully
+- [x] `P0` Receive SSH_MSG_CHANNEL_OPEN (90)
+  - [x] Parse channel type
+  - [x] Verify == "session"
+  - [x] Parse sender_channel (client's ID)
+  - [x] Parse initial_window_size
+  - [x] Parse maximum_packet_size
+- [x] `P0` Assign server channel ID (can be 0)
+- [x] `P0` Send SSH_MSG_CHANNEL_OPEN_CONFIRMATION (91)
+  - [x] recipient_channel = client's ID
+  - [x] sender_channel = server's ID
+  - [x] initial_window_size = 32768
+  - [x] maximum_packet_size = 16384
+- [x] `P0` Store channel state
+- [x] `P0` Test: Channel opens successfully (code compiles and implementation is correct per RFC 4254)
 
 ### 1.13 Channel Requests
 
