@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.so
+*.a
+nano_ssh_server
+
+# Editor and IDE files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Debugging files
+*.dSYM/
+vgcore.*
+core
+
+# Host keys (generated at runtime)
+host_key
+host_key.pub
+
+# Test artifacts
+*.pcap
+test_output/

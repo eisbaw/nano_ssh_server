@@ -18,35 +18,35 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 ## Phase 0: Project Setup
 
 ### Environment Setup
-- [ ] `P0` Create `shell.nix` with all dependencies
-  - [ ] gcc, gnumake
-  - [ ] openssh (client for testing)
-  - [ ] just
-  - [ ] valgrind
-  - [ ] gdb
-  - [ ] sshpass (for automated testing)
-  - [ ] xxd (for key conversion)
-  - [ ] Crypto library (TweetNaCl or alternative)
-- [ ] `P0` Test `nix-shell` loads correctly
-- [ ] `P0` Document `shell.nix` usage in README
+- [x] `P0` Create `shell.nix` with all dependencies
+  - [x] gcc, gnumake
+  - [x] openssh (client for testing)
+  - [x] just
+  - [x] valgrind
+  - [x] gdb
+  - [x] sshpass (for automated testing)
+  - [x] xxd (for key conversion)
+  - [x] Crypto library (TweetNaCl or alternative)
+- [x] `P0` Test `nix-shell` loads correctly
+- [x] `P0` Document `shell.nix` usage in README
 
 ### Build System
-- [ ] `P0` Create top-level `Makefile`
-  - [ ] Target: `all` - build all versions
-  - [ ] Target: `clean` - clean all versions
-  - [ ] Target: `size-report` - compare binary sizes
-- [ ] `P0` Create `justfile` with common tasks
-  - [ ] `just build <version>` - build specific version
-  - [ ] `just run <version>` - run server
-  - [ ] `just test <version>` - run tests
-  - [ ] `just connect` - connect with SSH client
-  - [ ] `just clean` - clean build artifacts
-  - [ ] `just size-report` - show binary sizes
-- [ ] `P0` Test build system works
+- [x] `P0` Create top-level `Makefile`
+  - [x] Target: `all` - build all versions
+  - [x] Target: `clean` - clean all versions
+  - [x] Target: `size-report` - compare binary sizes
+- [x] `P0` Create `justfile` with common tasks
+  - [x] `just build <version>` - build specific version
+  - [x] `just run <version>` - run server
+  - [x] `just test <version>` - run tests
+  - [x] `just connect` - connect with SSH client
+  - [x] `just clean` - clean build artifacts
+  - [x] `just size-report` - show binary sizes
+- [x] `P0` Test build system works
 
 ### Directory Structure
-- [ ] `P0` Create `v0-vanilla/` directory
-- [ ] `P0` Create `tests/` directory
+- [x] `P0` Create `v0-vanilla/` directory
+- [x] `P0` Create `tests/` directory
 - [ ] `P1` Create `v1-portable/` directory (when Phase 1 complete)
 - [ ] `P1` Create version directories for optimizations (later)
 
@@ -56,12 +56,12 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 - [ ] `P1` Store in `v0-vanilla/host_key.h`
 
 ### Documentation
-- [ ] `P0` Create README.md with:
-  - [ ] Project overview
-  - [ ] Quick start guide
-  - [ ] Build instructions
-  - [ ] Testing instructions
-  - [ ] Links to docs/
+- [x] `P0` Create README.md with:
+  - [x] Project overview
+  - [x] Quick start guide
+  - [x] Build instructions
+  - [x] Testing instructions
+  - [x] Links to docs/
 
 ---
 
@@ -70,9 +70,9 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 **Goal:** Working SSH server on Linux, correctness over size.
 
 ### Setup v0-vanilla Structure
-- [ ] `P0` Create `v0-vanilla/Makefile`
-- [ ] `P0` Create `v0-vanilla/main.c` skeleton
-- [ ] `P0` Test basic compilation
+- [x] `P0` Create `v0-vanilla/Makefile`
+- [x] `P0` Create `v0-vanilla/main.c` skeleton
+- [x] `P0` Test basic compilation
 
 ### 1.1 Network Layer (POSIX Sockets)
 
