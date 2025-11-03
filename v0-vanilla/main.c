@@ -42,6 +42,85 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 #define BLOCK_SIZE 8           /* Block size before encryption (default) */
 
 /* ======================
+ * Cryptography Helper Functions
+ * ====================== */
+
+/*
+ * Compute SHA-256 hash
+ *
+ * libsodium provides: crypto_hash_sha256()
+ * Output: 32 bytes
+ */
+void compute_sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
+    crypto_hash_sha256(out, in, inlen);
+}
+
+/*
+ * Compute SHA-256 hash with multiple inputs (for exchange hash H)
+ *
+ * This is a convenience wrapper for computing H = SHA256(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K)
+ */
+typedef struct {
+    crypto_hash_sha256_state state;
+} hash_state_t;
+
+void hash_init(hash_state_t *h) {
+    crypto_hash_sha256_init(&h->state);
+}
+
+void hash_update(hash_state_t *h, const uint8_t *data, size_t len) {
+    crypto_hash_sha256_update(&h->state, data, len);
+}
+
+void hash_final(hash_state_t *h, uint8_t *out) {
+    crypto_hash_sha256_final(&h->state, out);
+}
+
+/*
+ * Generate random bytes (libsodium provides this)
+ * Already using: randombytes_buf() in send_packet()
+ */
+
+/*
+ * Curve25519 key generation
+ *
+ * libsodium provides:
+ * - crypto_scalarmult_base(public, private) - generate public from private
+ * - crypto_scalarmult(shared, private, peer_public) - compute shared secret
+ */
+void generate_curve25519_keypair(uint8_t *private_key, uint8_t *public_key) {
+    /* Generate random private key */
+    randombytes_buf(private_key, 32);
+
+    /* Compute public key */
+    crypto_scalarmult_base(public_key, private_key);
+}
+
+int compute_curve25519_shared(uint8_t *shared, const uint8_t *private_key, const uint8_t *peer_public) {
+    /* Returns 0 on success, -1 on error (e.g., weak public key) */
+    return crypto_scalarmult(shared, private_key, peer_public);
+}
+
+/*
+ * Ed25519 signing (for host key)
+ *
+ * libsodium provides:
+ * - crypto_sign_keypair(public, private) - generate key pair
+ * - crypto_sign_detached(sig, &siglen, msg, msglen, private) - sign message
+ * - crypto_sign_verify_detached(sig, msg, msglen, public) - verify signature
+ */
+
+/*
+ * ChaCha20-Poly1305 AEAD cipher (OpenSSH variant)
+ *
+ * libsodium provides:
+ * - crypto_aead_chacha20poly1305_ietf_encrypt()
+ * - crypto_aead_chacha20poly1305_ietf_decrypt()
+ *
+ * Note: OpenSSH uses a custom two-key variant. We'll implement that in Phase 1.9
+ */
+
+/* ======================
  * Binary Packet Protocol Helper Functions
  * ====================== */
 

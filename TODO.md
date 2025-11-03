@@ -122,15 +122,15 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.4 Cryptography Setup
 
-- [ ] `P0` Choose crypto library (TweetNaCl recommended)
-- [ ] `P0` Add crypto library to build
-- [ ] `P0` Implement random number generation
-  - [ ] `/dev/urandom` wrapper for Linux
-  - [ ] Test: generates non-zero random bytes
-- [ ] `P0` Implement SHA-256 hashing
-  - [ ] Single-shot hash function
-  - [ ] Incremental hash (init/update/final)
-  - [ ] Test: verify with known test vectors
+- [x] `P0` Choose crypto library (TweetNaCl recommended)
+- [x] `P0` Add crypto library to build
+- [x] `P0` Implement random number generation
+  - [x] `/dev/urandom` wrapper for Linux
+  - [x] Test: generates non-zero random bytes
+- [x] `P0` Implement SHA-256 hashing
+  - [x] Single-shot hash function
+  - [x] Incremental hash (init/update/final)
+  - [x] Test: verify with known test vectors
 
 ### 1.5 Key Exchange - KEXINIT
 

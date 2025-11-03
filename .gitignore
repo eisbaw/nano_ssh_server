@@ -3,6 +3,7 @@
 *.so
 *.a
 nano_ssh_server
+test_crypto
 
 # Editor and IDE files
 *.swp
