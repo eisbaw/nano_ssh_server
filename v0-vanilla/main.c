@@ -2000,10 +2000,61 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         printf("[+] Shell not ready, skipping data transfer\n");
     }
 
-    /* TODO: Phase 1.15 - Close channel cleanly */
+    /* ======================
+     * Phase 1.15: Channel Close
+     * ====================== */
 
-    printf("[+] Closing connection (TODO: implement channel close)\n");
+    printf("[+] Closing channel...\n");
+
+    /* Send SSH_MSG_CHANNEL_EOF (no more data) */
+    uint8_t eof_msg[16];
+    size_t eof_len = 0;
+
+    eof_msg[eof_len++] = SSH_MSG_CHANNEL_EOF;
+    write_uint32_be(eof_msg + eof_len, client_channel_id);
+    eof_len += 4;
+
+    if (send_packet(client_fd, eof_msg, eof_len) < 0) {
+        fprintf(stderr, "[-] Failed to send CHANNEL_EOF\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_CHANNEL_EOF\n");
+
+    /* Send SSH_MSG_CHANNEL_CLOSE */
+    uint8_t close_msg[16];
+    size_t close_len = 0;
+
+    close_msg[close_len++] = SSH_MSG_CHANNEL_CLOSE;
+    write_uint32_be(close_msg + close_len, client_channel_id);
+    close_len += 4;
+
+    if (send_packet(client_fd, close_msg, close_len) < 0) {
+        fprintf(stderr, "[-] Failed to send CHANNEL_CLOSE\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_CHANNEL_CLOSE\n");
+
+    /* Wait for client's SSH_MSG_CHANNEL_CLOSE */
+    uint8_t client_close[16];
+    ssize_t client_close_len;
+
+    client_close_len = recv_packet(client_fd, client_close, sizeof(client_close));
+    if (client_close_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive CHANNEL_CLOSE from client (connection may already be closed)\n");
+        /* This is acceptable - client may have already closed */
+    } else if (client_close[0] != SSH_MSG_CHANNEL_CLOSE) {
+        fprintf(stderr, "[-] Expected CHANNEL_CLOSE (97), got %d\n", client_close[0]);
+        /* Non-fatal, continue with cleanup */
+    } else {
+        printf("[+] Received SSH_MSG_CHANNEL_CLOSE from client\n");
+    }
+
+    /* Close TCP connection */
+    printf("[+] Closing TCP connection\n");
     close(client_fd);
+    printf("[+] Connection closed successfully\n");
 }
 
 int main(int argc, char *argv[]) {
