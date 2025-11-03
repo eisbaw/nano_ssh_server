@@ -1,0 +1,549 @@
+# TODO: Nano SSH Server Implementation
+
+This document tracks all tasks for implementing the world's smallest SSH server for microcontrollers.
+
+**Status Legend:**
+- `[ ]` Not started
+- `[~]` In progress
+- `[x]` Completed
+- `[!]` Blocked/Issue
+
+**Priority:**
+- `P0` Critical path, must complete before next phase
+- `P1` Important, needed for full functionality
+- `P2` Nice to have, can defer
+
+---
+
+## Phase 0: Project Setup
+
+### Environment Setup
+- [ ] `P0` Create `shell.nix` with all dependencies
+  - [ ] gcc, gnumake
+  - [ ] openssh (client for testing)
+  - [ ] just
+  - [ ] valgrind
+  - [ ] gdb
+  - [ ] sshpass (for automated testing)
+  - [ ] xxd (for key conversion)
+  - [ ] Crypto library (TweetNaCl or alternative)
+- [ ] `P0` Test `nix-shell` loads correctly
+- [ ] `P0` Document `shell.nix` usage in README
+
+### Build System
+- [ ] `P0` Create top-level `Makefile`
+  - [ ] Target: `all` - build all versions
+  - [ ] Target: `clean` - clean all versions
+  - [ ] Target: `size-report` - compare binary sizes
+- [ ] `P0` Create `justfile` with common tasks
+  - [ ] `just build <version>` - build specific version
+  - [ ] `just run <version>` - run server
+  - [ ] `just test <version>` - run tests
+  - [ ] `just connect` - connect with SSH client
+  - [ ] `just clean` - clean build artifacts
+  - [ ] `just size-report` - show binary sizes
+- [ ] `P0` Test build system works
+
+### Directory Structure
+- [ ] `P0` Create `v0-vanilla/` directory
+- [ ] `P0` Create `tests/` directory
+- [ ] `P1` Create `v1-portable/` directory (when Phase 1 complete)
+- [ ] `P1` Create version directories for optimizations (later)
+
+### Host Key Generation
+- [ ] `P1` Generate Ed25519 host key pair
+- [ ] `P1` Convert to C header file format
+- [ ] `P1` Store in `v0-vanilla/host_key.h`
+
+### Documentation
+- [ ] `P0` Create README.md with:
+  - [ ] Project overview
+  - [ ] Quick start guide
+  - [ ] Build instructions
+  - [ ] Testing instructions
+  - [ ] Links to docs/
+
+---
+
+## Phase 1: v0-vanilla Implementation
+
+**Goal:** Working SSH server on Linux, correctness over size.
+
+### Setup v0-vanilla Structure
+- [ ] `P0` Create `v0-vanilla/Makefile`
+- [ ] `P0` Create `v0-vanilla/main.c` skeleton
+- [ ] `P0` Test basic compilation
+
+### 1.1 Network Layer (POSIX Sockets)
+
+- [ ] `P0` Implement TCP server socket creation
+  - [ ] `socket()` call
+  - [ ] `bind()` to port 2222
+  - [ ] `listen()` for connections
+  - [ ] Handle socket errors
+- [ ] `P0` Implement `accept()` for client connections
+- [ ] `P0` Implement `send()` wrapper
+- [ ] `P0` Implement `recv()` wrapper
+- [ ] `P0` Test: netcat can connect to server
+- [ ] `P0` Test: server doesn't crash on disconnect
+
+### 1.2 Version Exchange
+
+- [ ] `P0` Send server version string
+  - [ ] Format: "SSH-2.0-NanoSSH_0.1\r\n"
+  - [ ] Send immediately after accept
+- [ ] `P0` Receive client version string
+  - [ ] Read until \n found
+  - [ ] Validate starts with "SSH-2.0-"
+  - [ ] Store for exchange hash
+- [ ] `P0` Test: netcat sees version string
+- [ ] `P0` Test: can send "SSH-2.0-Test\r\n" via netcat
+
+### 1.3 Binary Packet Protocol (Unencrypted)
+
+- [ ] `P0` Implement packet framing functions
+  - [ ] `write_uint32_be()` - write big-endian uint32
+  - [ ] `read_uint32_be()` - read big-endian uint32
+  - [ ] `write_string()` - write length-prefixed string
+  - [ ] `read_string()` - read length-prefixed string
+- [ ] `P0` Implement padding calculation
+  - [ ] Ensure minimum 4 bytes
+  - [ ] Ensure total is multiple of 8
+- [ ] `P0` Implement `send_packet()` (unencrypted)
+  - [ ] Write packet_length (4 bytes)
+  - [ ] Write padding_length (1 byte)
+  - [ ] Write payload
+  - [ ] Write random padding
+- [ ] `P0` Implement `recv_packet()` (unencrypted)
+  - [ ] Read packet_length (4 bytes)
+  - [ ] Read full packet based on length
+  - [ ] Extract payload
+- [ ] `P0` Test: can send/receive simple packets
+
+### 1.4 Cryptography Setup
+
+- [ ] `P0` Choose crypto library (TweetNaCl recommended)
+- [ ] `P0` Add crypto library to build
+- [ ] `P0` Implement random number generation
+  - [ ] `/dev/urandom` wrapper for Linux
+  - [ ] Test: generates non-zero random bytes
+- [ ] `P0` Implement SHA-256 hashing
+  - [ ] Single-shot hash function
+  - [ ] Incremental hash (init/update/final)
+  - [ ] Test: verify with known test vectors
+
+### 1.5 Key Exchange - KEXINIT
+
+- [ ] `P0` Create hardcoded algorithm lists
+  - [ ] KEX: "curve25519-sha256"
+  - [ ] Host key: "ssh-ed25519"
+  - [ ] Cipher: "chacha20-poly1305@openssh.com"
+  - [ ] MAC: "" (AEAD)
+  - [ ] Compression: "none"
+- [ ] `P0` Build KEXINIT packet
+  - [ ] Message type: 20
+  - [ ] Random cookie (16 bytes)
+  - [ ] Algorithm name-lists
+  - [ ] Boolean: FALSE
+  - [ ] Reserved: 0
+- [ ] `P0` Send KEXINIT to client
+- [ ] `P0` Receive KEXINIT from client
+- [ ] `P0` Parse client's algorithm lists
+- [ ] `P0` Verify client supports our algorithms
+- [ ] `P0` Save both KEXINIT payloads (needed for exchange hash)
+- [ ] `P0` Test: SSH client completes KEXINIT exchange
+
+### 1.6 Key Exchange - Curve25519 DH
+
+- [ ] `P0` Generate server ephemeral key pair
+  - [ ] Use Curve25519 from TweetNaCl
+  - [ ] Private key: 32 random bytes
+  - [ ] Public key: curve25519_base()
+- [ ] `P0` Receive SSH_MSG_KEX_ECDH_INIT (30)
+  - [ ] Extract client ephemeral public key (32 bytes)
+- [ ] `P0` Compute shared secret K
+  - [ ] curve25519(server_private, client_public)
+- [ ] `P0` Build exchange hash H
+  - [ ] Concatenate: V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, K
+  - [ ] Hash with SHA-256
+  - [ ] First H becomes session_id
+- [ ] `P0` Sign exchange hash with host key
+  - [ ] Ed25519 signature using TweetNaCl
+- [ ] `P0` Build SSH_MSG_KEX_ECDH_REPLY (31)
+  - [ ] Server host public key
+  - [ ] Server ephemeral public key
+  - [ ] Signature
+- [ ] `P0` Send SSH_MSG_KEX_ECDH_REPLY
+- [ ] `P0` Test: Key exchange completes without errors
+
+### 1.7 Key Derivation
+
+- [ ] `P0` Implement key derivation function
+  - [ ] Input: K, H, letter, session_id
+  - [ ] Output: derived key of specified length
+  - [ ] Handle keys longer than hash output
+- [ ] `P0` Derive all 6 keys
+  - [ ] IV client→server (12 bytes for ChaCha20)
+  - [ ] IV server→client (12 bytes)
+  - [ ] Encryption key client→server (32 bytes)
+  - [ ] Encryption key server→client (32 bytes)
+  - [ ] Integrity key client→server (if needed)
+  - [ ] Integrity key server→client (if needed)
+- [ ] `P0` Initialize cipher contexts
+- [ ] `P0` Test: Keys derived correctly (verify with debug output)
+
+### 1.8 NEWKEYS and Encryption Activation
+
+- [ ] `P0` Receive SSH_MSG_NEWKEYS (21) from client
+- [ ] `P0` Activate incoming encryption (client→server keys)
+- [ ] `P0` Send SSH_MSG_NEWKEYS (21) to client
+- [ ] `P0` Activate outgoing encryption (server→client keys)
+- [ ] `P0` Initialize sequence numbers (both to 0)
+- [ ] `P0` Test: Encryption enabled on both sides
+
+### 1.9 Encrypted Packet Protocol
+
+- [ ] `P0` Implement ChaCha20-Poly1305 encryption
+  - [ ] Two-key variant (OpenSSH style)
+  - [ ] Encrypt packet_length separately
+  - [ ] Encrypt payload
+  - [ ] Compute Poly1305 MAC
+- [ ] `P0` Implement ChaCha20-Poly1305 decryption
+  - [ ] Decrypt packet_length
+  - [ ] Verify MAC before decryption
+  - [ ] Decrypt payload
+- [ ] `P0` Update `send_packet()` to use encryption
+  - [ ] Increment send sequence number
+- [ ] `P0` Update `recv_packet()` to use decryption
+  - [ ] Increment receive sequence number
+- [ ] `P0` Test: Encrypted packets work with SSH client
+
+### 1.10 Service Request
+
+- [ ] `P0` Receive SSH_MSG_SERVICE_REQUEST (5)
+  - [ ] Parse service name
+  - [ ] Verify == "ssh-userauth"
+- [ ] `P0` Send SSH_MSG_SERVICE_ACCEPT (6)
+  - [ ] Echo service name
+- [ ] `P0` Test: Service request completes
+
+### 1.11 Authentication
+
+- [ ] `P0` Receive SSH_MSG_USERAUTH_REQUEST (50)
+  - [ ] Parse username
+  - [ ] Parse service name
+  - [ ] Parse method name
+  - [ ] If method == "password":
+    - [ ] Parse change_password boolean
+    - [ ] Parse password string
+- [ ] `P0` Implement password verification
+  - [ ] Hardcoded credentials: user="user", pass="password123"
+  - [ ] Compare with received credentials
+- [ ] `P0` Send SSH_MSG_USERAUTH_SUCCESS (52) on match
+- [ ] `P0` Send SSH_MSG_USERAUTH_FAILURE (51) on mismatch
+- [ ] `P0` Test: Correct password authenticates
+- [ ] `P0` Test: Wrong password rejected
+
+### 1.12 Channel Open
+
+- [ ] `P0` Receive SSH_MSG_CHANNEL_OPEN (90)
+  - [ ] Parse channel type
+  - [ ] Verify == "session"
+  - [ ] Parse sender_channel (client's ID)
+  - [ ] Parse initial_window_size
+  - [ ] Parse maximum_packet_size
+- [ ] `P0` Assign server channel ID (can be 0)
+- [ ] `P0` Send SSH_MSG_CHANNEL_OPEN_CONFIRMATION (91)
+  - [ ] recipient_channel = client's ID
+  - [ ] sender_channel = server's ID
+  - [ ] initial_window_size = 32768
+  - [ ] maximum_packet_size = 16384
+- [ ] `P0` Store channel state
+- [ ] `P0` Test: Channel opens successfully
+
+### 1.13 Channel Requests
+
+- [ ] `P0` Receive SSH_MSG_CHANNEL_REQUEST (98)
+  - [ ] Parse recipient_channel
+  - [ ] Parse request_type string
+  - [ ] Parse want_reply boolean
+- [ ] `P0` Handle "pty-req" request
+  - [ ] Accept (send SUCCESS if want_reply)
+  - [ ] Can ignore PTY details
+- [ ] `P0` Handle "shell" request
+  - [ ] Accept (send SUCCESS if want_reply)
+  - [ ] Mark ready to send data
+- [ ] `P0` Handle "exec" request (optional)
+  - [ ] Accept (send SUCCESS if want_reply)
+- [ ] `P0` Send SSH_MSG_CHANNEL_SUCCESS (99) or FAILURE (100)
+- [ ] `P0` Test: PTY and shell requests accepted
+
+### 1.14 Data Transfer
+
+- [ ] `P0` Send "Hello World\r\n" via SSH_MSG_CHANNEL_DATA (94)
+  - [ ] Message type: 94
+  - [ ] recipient_channel = client's channel ID
+  - [ ] data = "Hello World\r\n"
+- [ ] `P0` Track window size (decrement when sending)
+- [ ] `P1` Handle SSH_MSG_CHANNEL_WINDOW_ADJUST (93) if needed
+- [ ] `P0` Test: Client receives "Hello World"
+
+### 1.15 Channel Close
+
+- [ ] `P0` Send SSH_MSG_CHANNEL_EOF (96)
+- [ ] `P0` Send SSH_MSG_CHANNEL_CLOSE (97)
+- [ ] `P0` Receive SSH_MSG_CHANNEL_CLOSE (97) from client
+- [ ] `P0` Close TCP connection
+- [ ] `P0` Test: Clean disconnect, no crashes
+
+### 1.16 Error Handling
+
+- [ ] `P1` Implement SSH_MSG_DISCONNECT (1)
+- [ ] `P1` Handle unexpected message types
+- [ ] `P1` Handle parse errors gracefully
+- [ ] `P1` Handle network errors (connection drop)
+- [ ] `P2` Add debug logging (optional, remove in optimized versions)
+
+---
+
+## Phase 1: Testing (CRITICAL - DO NOT SKIP)
+
+### Unit Tests
+- [ ] `P0` Test: Binary packet framing
+- [ ] `P0` Test: String encoding/decoding
+- [ ] `P0` Test: Padding calculation
+- [ ] `P0` Test: SHA-256 with known vectors
+- [ ] `P0` Test: Curve25519 with known vectors
+- [ ] `P0` Test: Ed25519 with known vectors
+- [ ] `P0` Test: ChaCha20-Poly1305 with known vectors
+
+### Integration Tests
+- [ ] `P0` Create `tests/test_version.sh`
+  - [ ] Start server
+  - [ ] Connect with netcat
+  - [ ] Verify version exchange
+- [ ] `P0` Create `tests/test_connection.sh`
+  - [ ] Start server
+  - [ ] Connect with SSH client
+  - [ ] Verify "Hello World" received
+- [ ] `P0` Create `tests/test_auth.sh`
+  - [ ] Test wrong password rejected
+  - [ ] Test correct password accepted
+- [ ] `P0` Create `tests/run_all.sh`
+  - [ ] Run all tests
+  - [ ] Report pass/fail count
+
+### Manual Testing
+- [ ] `P0` Test: `ssh -vvv -p 2222 user@localhost`
+  - [ ] Verify all protocol phases
+  - [ ] Check for errors in verbose output
+- [ ] `P0` Test: Multiple connections in sequence
+- [ ] `P0` Test: Ctrl+C disconnect handling
+- [ ] `P0` Test: Invalid data handling
+
+### Memory Testing
+- [ ] `P0` Test with valgrind
+  - [ ] No memory leaks
+  - [ ] No invalid reads/writes
+  - [ ] No uninitialized values
+- [ ] `P0` Document memory usage
+
+### Debugging
+- [ ] `P1` Test with `gdb` if issues arise
+- [ ] `P1` Packet capture with tcpdump/Wireshark
+- [ ] `P1` Compare with OpenSSH server behavior
+
+### Documentation
+- [ ] `P0` Document test results
+- [ ] `P0` Document known issues
+- [ ] `P0` Create test checklist
+
+---
+
+## Phase 2: v1-portable Implementation
+
+**Goal:** Platform-independent code with network abstraction.
+
+### Design Network Abstraction
+- [ ] `P0` Create `network.h` interface
+  - [ ] Define `net_ops_t` structure
+  - [ ] Define `net_conn_t` type
+  - [ ] Document interface contract
+- [ ] `P0` Review with PRD requirements
+
+### Implement POSIX Backend
+- [ ] `P0` Create `v1-portable/net_posix.c`
+  - [ ] Implement `posix_init()`
+  - [ ] Implement `posix_accept()`
+  - [ ] Implement `posix_read()`
+  - [ ] Implement `posix_write()`
+  - [ ] Implement `posix_close()`
+  - [ ] Implement `posix_cleanup()`
+- [ ] `P0` Test: POSIX backend works on Linux
+
+### Refactor v0 to v1
+- [ ] `P0` Copy v0-vanilla to v1-portable
+- [ ] `P0` Replace direct socket calls with net_ops
+- [ ] `P0` Abstract random number generation
+  - [ ] Create `random.h` interface
+  - [ ] Implement `random_posix.c`
+- [ ] `P0` Remove all platform-specific includes from core
+- [ ] `P0` Test: v1-portable works identically to v0
+
+### Platform Preparation
+- [ ] `P1` Create stub `net_lwip.c` for ESP32
+- [ ] `P1` Create stub `random_esp32.c`
+- [ ] `P1` Document porting process
+- [ ] `P2` Test on actual ESP32 (if hardware available)
+
+### Testing v1-portable
+- [ ] `P0` Run all tests from Phase 1
+- [ ] `P0` Verify identical behavior to v0
+- [ ] `P0` Measure binary size (should be slightly larger)
+- [ ] `P0` Document abstraction overhead
+
+---
+
+## Phase 3: Optimization Iterations
+
+### v2-opt1: Compiler Optimizations
+- [ ] `P0` Copy v1-portable to v2-opt1
+- [ ] `P0` Add compiler flags:
+  - [ ] `-Os` (optimize for size)
+  - [ ] `-flto` (link-time optimization)
+  - [ ] `-ffunction-sections -fdata-sections`
+  - [ ] `-Wl,--gc-sections` (linker)
+- [ ] `P0` Add `strip -s` to build
+- [ ] `P0` Test: Functionality unchanged
+- [ ] `P0` Measure: Binary size reduction
+- [ ] `P0` Document: Optimization impact
+
+### v3-opt2: Minimal Crypto Library
+- [ ] `P0` Evaluate alternatives:
+  - [ ] TweetNaCl current size
+  - [ ] Monocypher size
+  - [ ] Custom minimal implementation
+- [ ] `P0` Implement chosen alternative
+- [ ] `P0` Test: All crypto operations work
+- [ ] `P0` Measure: Size difference
+- [ ] `P0` Document: Trade-offs
+
+### v4-opt3: Static Buffer Management
+- [ ] `P0` Copy previous best version
+- [ ] `P0` Replace malloc/free with static buffers
+  - [ ] Packet buffers
+  - [ ] Crypto state
+  - [ ] Channel state
+- [ ] `P0` Calculate maximum memory needed
+- [ ] `P0` Test: No memory allocation at runtime
+- [ ] `P0` Measure: Binary size and RAM usage
+- [ ] `P0` Document: Memory layout
+
+### v5-opt4: State Machine Optimization
+- [ ] `P0` Analyze control flow
+- [ ] `P0` Minimize branching
+- [ ] `P0` Combine similar code paths
+- [ ] `P0` Optimize hot paths
+- [ ] `P0` Test: Functionality preserved
+- [ ] `P0` Measure: Size reduction
+- [ ] `P0` Document: Changes made
+
+### v6-opt5: Aggressive Optimization
+- [ ] `P0` Combine all successful optimizations
+- [ ] `P0` Inline small functions
+- [ ] `P0` Use lookup tables where beneficial
+- [ ] `P0` Remove debug code
+- [ ] `P0` Remove error messages (just disconnect)
+- [ ] `P1` Consider assembly for critical paths
+- [ ] `P0` Test: Still works with SSH client
+- [ ] `P0` Measure: Final size
+- [ ] `P0` Document: Total optimization journey
+
+### Testing Each Version
+- [ ] `P0` Run full test suite on each version
+- [ ] `P0` Compare sizes: `just size-report`
+- [ ] `P0` Document size progression
+- [ ] `P0` Keep test results in table
+
+---
+
+## Phase 4: Documentation & Polish
+
+### Size Comparison
+- [ ] `P0` Create table of all versions
+  - [ ] Binary size (bytes)
+  - [ ] Lines of code
+  - [ ] Compilation time
+  - [ ] Memory usage
+- [ ] `P0` Create graphs/charts (optional)
+
+### Lessons Learned
+- [ ] `P1` Document what worked
+- [ ] `P1` Document what didn't work
+- [ ] `P1` Document gotchas and pitfalls
+- [ ] `P1` Recommendations for future work
+
+### Final Testing
+- [ ] `P0` Test all versions one final time
+- [ ] `P0` Test on different Linux distributions (optional)
+- [ ] `P1` Test on ESP32 (if hardware available)
+- [ ] `P0` Document final test results
+
+### Repository Cleanup
+- [ ] `P1` Remove temporary files
+- [ ] `P1` Ensure all versions build cleanly
+- [ ] `P1` Update README with results
+- [ ] `P1` Add LICENSE file
+- [ ] `P1` Add CONTRIBUTING guide (optional)
+
+### Release Preparation
+- [ ] `P1` Tag release versions
+- [ ] `P1` Create release notes
+- [ ] `P1` Archive final binaries
+- [ ] `P2` Create demo video (optional)
+
+---
+
+## Continuous Tasks
+
+### Throughout Development
+- [ ] Keep PRD.md updated with any changes
+- [ ] Update TODO.md as tasks complete
+- [ ] Document issues encountered
+- [ ] Run tests after every significant change
+- [ ] Commit frequently with clear messages
+- [ ] Update CLAUDE.md if workflow changes
+
+### Code Quality
+- [ ] Follow consistent code style
+- [ ] Add comments for complex logic
+- [ ] Keep functions small and focused
+- [ ] Use meaningful variable names
+- [ ] Avoid premature optimization
+
+### Testing Discipline
+- [ ] Never skip tests to "save time"
+- [ ] Fix broken tests immediately
+- [ ] Add tests for bugs found
+- [ ] Keep test suite fast
+- [ ] Automate everything possible
+
+---
+
+## Notes
+
+- **Priority discipline:** Complete all P0 tasks in a phase before moving to next phase
+- **Testing discipline:** All tests must pass before proceeding to optimization
+- **Size discipline:** Measure and document size after every change
+- **Version discipline:** Keep all versions independent and buildable
+
+## Progress Tracking
+
+- [ ] Phase 0: Project Setup (0/X tasks)
+- [ ] Phase 1: v0-vanilla Implementation (0/X tasks)
+- [ ] Phase 1: Testing (0/X tasks)
+- [ ] Phase 2: v1-portable Implementation (0/X tasks)
+- [ ] Phase 3: Optimization Iterations (0/X tasks)
+- [ ] Phase 4: Documentation & Polish (0/X tasks)
+
+Last updated: 2024-01-15
