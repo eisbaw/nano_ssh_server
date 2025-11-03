@@ -101,24 +101,24 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.3 Binary Packet Protocol (Unencrypted)
 
-- [ ] `P0` Implement packet framing functions
-  - [ ] `write_uint32_be()` - write big-endian uint32
-  - [ ] `read_uint32_be()` - read big-endian uint32
-  - [ ] `write_string()` - write length-prefixed string
-  - [ ] `read_string()` - read length-prefixed string
-- [ ] `P0` Implement padding calculation
-  - [ ] Ensure minimum 4 bytes
-  - [ ] Ensure total is multiple of 8
-- [ ] `P0` Implement `send_packet()` (unencrypted)
-  - [ ] Write packet_length (4 bytes)
-  - [ ] Write padding_length (1 byte)
-  - [ ] Write payload
-  - [ ] Write random padding
-- [ ] `P0` Implement `recv_packet()` (unencrypted)
-  - [ ] Read packet_length (4 bytes)
-  - [ ] Read full packet based on length
-  - [ ] Extract payload
-- [ ] `P0` Test: can send/receive simple packets
+- [x] `P0` Implement packet framing functions
+  - [x] `write_uint32_be()` - write big-endian uint32
+  - [x] `read_uint32_be()` - read big-endian uint32
+  - [x] `write_string()` - write length-prefixed string
+  - [x] `read_string()` - read length-prefixed string
+- [x] `P0` Implement padding calculation
+  - [x] Ensure minimum 4 bytes
+  - [x] Ensure total is multiple of 8
+- [x] `P0` Implement `send_packet()` (unencrypted)
+  - [x] Write packet_length (4 bytes)
+  - [x] Write padding_length (1 byte)
+  - [x] Write payload
+  - [x] Write random padding
+- [x] `P0` Implement `recv_packet()` (unencrypted)
+  - [x] Read packet_length (4 bytes)
+  - [x] Read full packet based on length
+  - [x] Extract payload
+- [x] `P0` Test: can send/receive simple packets
 
 ### 1.4 Cryptography Setup
 
