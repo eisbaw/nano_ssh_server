@@ -213,28 +213,30 @@ This document tracks all tasks for implementing the world's smallest SSH server 
   - [!] Decryption still produces invalid packet lengths
   - [!] Code preserved in main.c but not used
 
-- [ ] `P0` Implement AES-128-CTR + HMAC-SHA256 (CURRENT APPROACH)
-  - [ ] AES-128-CTR encryption (using libsodium or tiny-AES-c)
-  - [ ] HMAC-SHA256 for packet authentication
-  - [ ] Update KEXINIT to advertise "aes128-ctr" and "hmac-sha2-256"
-- [ ] `P0` Update `send_packet()` to use AES-128-CTR + HMAC
-  - [ ] Encrypt packet with AES-128-CTR
-  - [ ] Compute HMAC-SHA256(seq || packet)
-  - [ ] Increment send sequence number
-- [ ] `P0` Update `recv_packet()` to use AES-128-CTR + HMAC
-  - [ ] Verify HMAC before decryption
-  - [ ] Decrypt packet with AES-128-CTR
-  - [ ] Increment receive sequence number
-- [ ] `P0` Test: Encrypted packets work with SSH client
+- [x] `P0` Implement AES-128-CTR + HMAC-SHA256 (✓ WORKING)
+  - [x] AES-128-CTR encryption using OpenSSL EVP API
+  - [x] HMAC-SHA256 for packet authentication
+  - [x] Update KEXINIT to advertise "aes128-ctr" and "hmac-sha2-256"
+  - [x] Fixed sequence number initialization (start from 3, not 0)
+- [x] `P0` Update `send_packet()` to use AES-128-CTR + HMAC
+  - [x] Encrypt packet with AES-128-CTR
+  - [x] Compute HMAC-SHA256(seq || packet)
+  - [x] Increment send sequence number
+- [x] `P0` Update `recv_packet()` to use AES-128-CTR + HMAC
+  - [x] Read and decrypt first block (16 bytes) to get packet length
+  - [x] Read and decrypt remaining packet bytes
+  - [x] Verify HMAC over decrypted packet
+  - [x] Increment receive sequence number
+- [x] `P0` Test: Encrypted packets work with SSH client
 
 ### 1.10 Service Request
 
-- [ ] `P0` Receive SSH_MSG_SERVICE_REQUEST (5)
-  - [ ] Parse service name
-  - [ ] Verify == "ssh-userauth"
-- [ ] `P0` Send SSH_MSG_SERVICE_ACCEPT (6)
-  - [ ] Echo service name
-- [ ] `P0` Test: Service request completes
+- [x] `P0` Receive SSH_MSG_SERVICE_REQUEST (5)
+  - [x] Parse service name
+  - [x] Verify == "ssh-userauth"
+- [x] `P0` Send SSH_MSG_SERVICE_ACCEPT (6)
+  - [x] Echo service name
+- [x] `P0` Test: Service request completes
 
 ### 1.11 Authentication
 
