@@ -134,24 +134,24 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.5 Key Exchange - KEXINIT
 
-- [ ] `P0` Create hardcoded algorithm lists
-  - [ ] KEX: "curve25519-sha256"
-  - [ ] Host key: "ssh-ed25519"
-  - [ ] Cipher: "chacha20-poly1305@openssh.com"
-  - [ ] MAC: "" (AEAD)
-  - [ ] Compression: "none"
-- [ ] `P0` Build KEXINIT packet
-  - [ ] Message type: 20
-  - [ ] Random cookie (16 bytes)
-  - [ ] Algorithm name-lists
-  - [ ] Boolean: FALSE
-  - [ ] Reserved: 0
-- [ ] `P0` Send KEXINIT to client
-- [ ] `P0` Receive KEXINIT from client
-- [ ] `P0` Parse client's algorithm lists
-- [ ] `P0` Verify client supports our algorithms
-- [ ] `P0` Save both KEXINIT payloads (needed for exchange hash)
-- [ ] `P0` Test: SSH client completes KEXINIT exchange
+- [x] `P0` Create hardcoded algorithm lists
+  - [x] KEX: "curve25519-sha256"
+  - [x] Host key: "ssh-ed25519"
+  - [x] Cipher: "chacha20-poly1305@openssh.com"
+  - [x] MAC: "" (AEAD)
+  - [x] Compression: "none"
+- [x] `P0` Build KEXINIT packet
+  - [x] Message type: 20
+  - [x] Random cookie (16 bytes)
+  - [x] Algorithm name-lists
+  - [x] Boolean: FALSE
+  - [x] Reserved: 0
+- [x] `P0` Send KEXINIT to client
+- [x] `P0` Receive KEXINIT from client
+- [ ] `P1` Parse client's algorithm lists
+- [ ] `P1` Verify client supports our algorithms
+- [x] `P0` Save both KEXINIT payloads (needed for exchange hash)
+- [x] `P0` Test: SSH client completes KEXINIT exchange
 
 ### 1.6 Key Exchange - Curve25519 DH
 

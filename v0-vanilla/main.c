@@ -41,6 +41,41 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 #define MIN_PADDING 4          /* Minimum padding bytes */
 #define BLOCK_SIZE 8           /* Block size before encryption (default) */
 
+/* SSH message type constants (RFC 4253) */
+#define SSH_MSG_DISCONNECT                1
+#define SSH_MSG_IGNORE                    2
+#define SSH_MSG_UNIMPLEMENTED             3
+#define SSH_MSG_DEBUG                     4
+#define SSH_MSG_SERVICE_REQUEST           5
+#define SSH_MSG_SERVICE_ACCEPT            6
+#define SSH_MSG_KEXINIT                   20
+#define SSH_MSG_NEWKEYS                   21
+#define SSH_MSG_KEX_ECDH_INIT             30
+#define SSH_MSG_KEX_ECDH_REPLY            31
+#define SSH_MSG_USERAUTH_REQUEST          50
+#define SSH_MSG_USERAUTH_FAILURE          51
+#define SSH_MSG_USERAUTH_SUCCESS          52
+#define SSH_MSG_USERAUTH_BANNER           53
+#define SSH_MSG_CHANNEL_OPEN              90
+#define SSH_MSG_CHANNEL_OPEN_CONFIRMATION 91
+#define SSH_MSG_CHANNEL_OPEN_FAILURE      92
+#define SSH_MSG_CHANNEL_WINDOW_ADJUST     93
+#define SSH_MSG_CHANNEL_DATA              94
+#define SSH_MSG_CHANNEL_EXTENDED_DATA     95
+#define SSH_MSG_CHANNEL_EOF               96
+#define SSH_MSG_CHANNEL_CLOSE             97
+#define SSH_MSG_CHANNEL_REQUEST           98
+#define SSH_MSG_CHANNEL_SUCCESS           99
+#define SSH_MSG_CHANNEL_FAILURE           100
+
+/* Algorithm names for KEXINIT */
+#define KEX_ALGORITHM           "curve25519-sha256"
+#define HOST_KEY_ALGORITHM      "ssh-ed25519"
+#define ENCRYPTION_ALGORITHM    "chacha20-poly1305@openssh.com"
+#define MAC_ALGORITHM           ""    /* Not needed with AEAD */
+#define COMPRESSION_ALGORITHM   "none"
+#define LANGUAGE                ""
+
 /* ======================
  * Cryptography Helper Functions
  * ====================== */
@@ -321,6 +356,77 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 }
 
 /* ======================
+ * SSH Protocol Helper Functions
+ * ====================== */
+
+/*
+ * Helper: Write name-list (SSH string format for algorithm lists)
+ * Returns bytes written
+ */
+size_t write_name_list(uint8_t *buf, const char *names) {
+    size_t len = strlen(names);
+    write_uint32_be(buf, len);
+    memcpy(buf + 4, names, len);
+    return 4 + len;
+}
+
+/*
+ * Build KEXINIT payload
+ *
+ * Returns payload length
+ * Buffer must be at least 1024 bytes
+ */
+size_t build_kexinit(uint8_t *payload) {
+    size_t offset = 0;
+
+    /* Message type */
+    payload[offset++] = SSH_MSG_KEXINIT;
+
+    /* Cookie: 16 random bytes */
+    randombytes_buf(payload + offset, 16);
+    offset += 16;
+
+    /* kex_algorithms */
+    offset += write_name_list(payload + offset, KEX_ALGORITHM);
+
+    /* server_host_key_algorithms */
+    offset += write_name_list(payload + offset, HOST_KEY_ALGORITHM);
+
+    /* encryption_algorithms_client_to_server */
+    offset += write_name_list(payload + offset, ENCRYPTION_ALGORITHM);
+
+    /* encryption_algorithms_server_to_client */
+    offset += write_name_list(payload + offset, ENCRYPTION_ALGORITHM);
+
+    /* mac_algorithms_client_to_server */
+    offset += write_name_list(payload + offset, MAC_ALGORITHM);
+
+    /* mac_algorithms_server_to_client */
+    offset += write_name_list(payload + offset, MAC_ALGORITHM);
+
+    /* compression_algorithms_client_to_server */
+    offset += write_name_list(payload + offset, COMPRESSION_ALGORITHM);
+
+    /* compression_algorithms_server_to_client */
+    offset += write_name_list(payload + offset, COMPRESSION_ALGORITHM);
+
+    /* languages_client_to_server */
+    offset += write_name_list(payload + offset, LANGUAGE);
+
+    /* languages_server_to_client */
+    offset += write_name_list(payload + offset, LANGUAGE);
+
+    /* first_kex_packet_follows: FALSE */
+    payload[offset++] = 0;
+
+    /* Reserved: 0 */
+    write_uint32_be(payload + offset, 0);
+    offset += 4;
+
+    return offset;
+}
+
+/* ======================
  * Network Helper Functions
  * ====================== */
 
@@ -500,26 +606,64 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr) {
 
     printf("[+] Version exchange complete\n");
 
-    /* TODO: Store version strings for exchange hash H
-     * V_C = client_version (without \r\n)
-     * V_S = SERVER_VERSION (without \r\n)
+    /* ======================
+     * Phase 1.5: KEXINIT Exchange
+     * ====================== */
+
+    uint8_t server_kexinit[1024];
+    uint8_t client_kexinit[4096];  /* Client sends comprehensive algorithm lists */
+    size_t server_kexinit_len;
+    ssize_t client_kexinit_len_s;
+
+    /* Build our KEXINIT payload */
+    server_kexinit_len = build_kexinit(server_kexinit);
+    printf("[+] Built KEXINIT payload (%zu bytes)\n", server_kexinit_len);
+
+    /* Send our KEXINIT */
+    if (send_packet(client_fd, server_kexinit, server_kexinit_len) < 0) {
+        fprintf(stderr, "[-] Failed to send KEXINIT\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent KEXINIT\n");
+
+    /* Receive client's KEXINIT */
+    client_kexinit_len_s = recv_packet(client_fd, client_kexinit, sizeof(client_kexinit));
+    if (client_kexinit_len_s <= 0) {
+        fprintf(stderr, "[-] Failed to receive client KEXINIT\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Received client KEXINIT (%zd bytes)\n", client_kexinit_len_s);
+
+    /* Validate it's a KEXINIT message */
+    if (client_kexinit[0] != SSH_MSG_KEXINIT) {
+        fprintf(stderr, "[-] Expected KEXINIT (20), got message type %d\n", client_kexinit[0]);
+        close(client_fd);
+        return;
+    }
+
+    printf("[+] KEXINIT exchange complete\n");
+
+    /* TODO: Parse client KEXINIT and verify algorithm compatibility */
+    /* TODO: Store both KEXINIT payloads for exchange hash H:
+     *       I_C = client_kexinit
+     *       I_S = server_kexinit
      */
 
     /* TODO: Implement remaining SSH protocol
      *
      * Phase 1 tasks (see TODO.md):
-     * 2. Binary Packet Protocol - Framing
-     * 3. Cryptography - Random, SHA-256, Curve25519, Ed25519, ChaCha20-Poly1305
-     * 4. Key Exchange - KEXINIT, Curve25519 DH
-     * 5. Key Derivation - Derive encryption keys
-     * 6. NEWKEYS - Activate encryption
-     * 7. Encrypted Packets - ChaCha20-Poly1305
-     * 8. Service Request - ssh-userauth
-     * 9. Authentication - Password auth
-     * 10. Channel Open - Session channel
-     * 11. Channel Requests - PTY, shell
-     * 12. Data Transfer - Send "Hello World"
-     * 13. Channel Close - Clean disconnect
+     * 1.6: Key Exchange - Curve25519 DH
+     * 1.7: Key Derivation - Derive encryption keys
+     * 1.8: NEWKEYS - Activate encryption
+     * 1.9: Encrypted Packets - ChaCha20-Poly1305
+     * 1.10: Service Request - ssh-userauth
+     * 1.11: Authentication - Password auth
+     * 1.12: Channel Open - Session channel
+     * 1.13: Channel Requests - PTY, shell
+     * 1.14: Data Transfer - Send "Hello World"
+     * 1.15: Channel Close - Clean disconnect
      */
 
     printf("[!] SSH protocol not fully implemented yet\n");
