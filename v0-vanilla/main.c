@@ -1952,10 +1952,57 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     printf("[+] Channel requests complete, shell_ready=%d\n", shell_ready);
 
-    /* TODO: Phase 1.14 - Send "Hello World" data */
+    /* ======================
+     * Phase 1.14: Data Transfer
+     * ====================== */
+
+    if (shell_ready) {
+        const char *hello_msg = "Hello World\r\n";
+        size_t hello_len = strlen(hello_msg);
+        uint8_t data_msg[1024];
+        size_t data_msg_len = 0;
+
+        /* Build SSH_MSG_CHANNEL_DATA:
+         * byte      SSH_MSG_CHANNEL_DATA (94)
+         * uint32    recipient_channel (client's channel ID)
+         * string    data (length-prefixed)
+         */
+        data_msg[data_msg_len++] = SSH_MSG_CHANNEL_DATA;
+
+        /* recipient_channel = client's channel ID */
+        write_uint32_be(data_msg + data_msg_len, client_channel_id);
+        data_msg_len += 4;
+
+        /* data as SSH string (length + content) */
+        data_msg_len += write_string(data_msg + data_msg_len, hello_msg, hello_len);
+
+        /* Check window size before sending */
+        if (hello_len > client_window_size) {
+            fprintf(stderr, "[-] Warning: Data exceeds client window size (%zu > %u)\n",
+                    hello_len, client_window_size);
+            /* In production, we'd need to split data or wait for WINDOW_ADJUST */
+            /* For now, send anyway since our message is small */
+        }
+
+        /* Send the data */
+        if (send_packet(client_fd, data_msg, data_msg_len) < 0) {
+            fprintf(stderr, "[-] Failed to send CHANNEL_DATA\n");
+            close(client_fd);
+            return;
+        }
+        printf("[+] Sent SSH_MSG_CHANNEL_DATA: \"%s\" (%zu bytes)\n", hello_msg, hello_len);
+
+        /* Update client window size (track how much we've sent) */
+        client_window_size -= hello_len;
+        printf("[+] Client window size remaining: %u bytes\n", client_window_size);
+
+    } else {
+        printf("[+] Shell not ready, skipping data transfer\n");
+    }
+
     /* TODO: Phase 1.15 - Close channel cleanly */
 
-    printf("[+] Closing connection (TODO: implement data transfer and channel close)\n");
+    printf("[+] Closing connection (TODO: implement channel close)\n");
     close(client_fd);
 }
 
