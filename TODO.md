@@ -76,16 +76,16 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.1 Network Layer (POSIX Sockets)
 
-- [ ] `P0` Implement TCP server socket creation
-  - [ ] `socket()` call
-  - [ ] `bind()` to port 2222
-  - [ ] `listen()` for connections
-  - [ ] Handle socket errors
-- [ ] `P0` Implement `accept()` for client connections
-- [ ] `P0` Implement `send()` wrapper
-- [ ] `P0` Implement `recv()` wrapper
-- [ ] `P0` Test: netcat can connect to server
-- [ ] `P0` Test: server doesn't crash on disconnect
+- [x] `P0` Implement TCP server socket creation
+  - [x] `socket()` call
+  - [x] `bind()` to port 2222
+  - [x] `listen()` for connections
+  - [x] Handle socket errors
+- [x] `P0` Implement `accept()` for client connections
+- [x] `P0` Implement `send()` wrapper
+- [x] `P0` Implement `recv()` wrapper
+- [x] `P0` Test: netcat can connect to server
+- [x] `P0` Test: server doesn't crash on disconnect
 
 ### 1.2 Version Exchange
 
