@@ -89,15 +89,15 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.2 Version Exchange
 
-- [ ] `P0` Send server version string
-  - [ ] Format: "SSH-2.0-NanoSSH_0.1\r\n"
-  - [ ] Send immediately after accept
-- [ ] `P0` Receive client version string
-  - [ ] Read until \n found
-  - [ ] Validate starts with "SSH-2.0-"
-  - [ ] Store for exchange hash
-- [ ] `P0` Test: netcat sees version string
-- [ ] `P0` Test: can send "SSH-2.0-Test\r\n" via netcat
+- [x] `P0` Send server version string
+  - [x] Format: "SSH-2.0-NanoSSH_0.1\r\n"
+  - [x] Send immediately after accept
+- [x] `P0` Receive client version string
+  - [x] Read until \n found
+  - [x] Validate starts with "SSH-2.0-"
+  - [x] Store for exchange hash
+- [x] `P0` Test: netcat sees version string
+- [x] `P0` Test: can send "SSH-2.0-Test\r\n" via netcat
 
 ### 1.3 Binary Packet Protocol (Unencrypted)
 

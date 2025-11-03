@@ -139,18 +139,83 @@ ssize_t recv_data(int fd, void *buf, size_t len) {
 }
 
 /*
- * Handle SSH connection (placeholder)
+ * Handle SSH connection
  */
 void handle_client(int client_fd, struct sockaddr_in *client_addr) {
     char client_ip[INET_ADDRSTRLEN];
+    char client_version[256];
+    char server_version_line[256];
+    ssize_t n;
+    int i, version_len;
 
     inet_ntop(AF_INET, &client_addr->sin_addr, client_ip, sizeof(client_ip));
     printf("\n[+] Client connected: %s:%d\n", client_ip, ntohs(client_addr->sin_port));
 
-    /* TODO: Implement SSH protocol
+    /* ======================
+     * Phase 1.2: Version Exchange
+     * ====================== */
+
+    /* Send server version string (plaintext, ends with \r\n) */
+    snprintf(server_version_line, sizeof(server_version_line), "%s\r\n", SERVER_VERSION);
+    if (send_data(client_fd, server_version_line, strlen(server_version_line)) < 0) {
+        fprintf(stderr, "[-] Failed to send version string\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent version: %s", server_version_line);
+
+    /* Receive client version string (read until \n) */
+    memset(client_version, 0, sizeof(client_version));
+    version_len = 0;
+
+    for (i = 0; i < (int)sizeof(client_version) - 1; i++) {
+        n = recv_data(client_fd, &client_version[i], 1);
+        if (n <= 0) {
+            fprintf(stderr, "[-] Failed to receive version string\n");
+            close(client_fd);
+            return;
+        }
+        version_len++;
+
+        /* Stop at \n */
+        if (client_version[i] == '\n') {
+            break;
+        }
+    }
+
+    /* Null-terminate */
+    client_version[version_len] = '\0';
+
+    /* Remove \r\n if present */
+    if (version_len > 0 && client_version[version_len - 1] == '\n') {
+        client_version[version_len - 1] = '\0';
+        version_len--;
+    }
+    if (version_len > 0 && client_version[version_len - 1] == '\r') {
+        client_version[version_len - 1] = '\0';
+        version_len--;
+    }
+
+    printf("[+] Received version: %s\n", client_version);
+
+    /* Validate client version starts with "SSH-2.0-" */
+    if (strncmp(client_version, "SSH-2.0-", 8) != 0) {
+        fprintf(stderr, "[-] Invalid SSH version: %s\n", client_version);
+        fprintf(stderr, "[-] Expected: SSH-2.0-*\n");
+        close(client_fd);
+        return;
+    }
+
+    printf("[+] Version exchange complete\n");
+
+    /* TODO: Store version strings for exchange hash H
+     * V_C = client_version (without \r\n)
+     * V_S = SERVER_VERSION (without \r\n)
+     */
+
+    /* TODO: Implement remaining SSH protocol
      *
      * Phase 1 tasks (see TODO.md):
-     * 1. Version Exchange - SSH-2.0 handshake
      * 2. Binary Packet Protocol - Framing
      * 3. Cryptography - Random, SHA-256, Curve25519, Ed25519, ChaCha20-Poly1305
      * 4. Key Exchange - KEXINIT, Curve25519 DH
@@ -165,7 +230,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr) {
      * 13. Channel Close - Clean disconnect
      */
 
-    printf("[!] SSH protocol not implemented yet\n");
+    printf("[!] SSH protocol not fully implemented yet\n");
     printf("[+] Closing connection\n");
 
     close(client_fd);
