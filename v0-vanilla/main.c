@@ -1789,15 +1789,173 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     printf("    Server max packet: %u\n", server_max_packet);
     printf("[+] Channel opened successfully\n");
 
-    /* Store channel state (for future use in Phase 1.13+) */
+    /* Store channel state (for future use in Phase 1.14+) */
     /* For now, we just have local variables. In a production server, we'd
      * store this in a channel state structure. */
 
-    /* TODO: Phase 1.13 - Handle channel requests (pty-req, shell, etc.) */
+    /* ======================
+     * Phase 1.13: Channel Requests
+     * ====================== */
+
+    /* Clients typically send multiple channel requests:
+     * 1. pty-req (PTY allocation)
+     * 2. shell or exec (what to run)
+     * We need to handle these in a loop */
+
+    int shell_ready = 0;  /* Flag: ready to send data after shell request */
+    int requests_done = 0;
+
+    while (!requests_done) {
+        uint8_t channel_request[4096];
+        ssize_t channel_request_len;
+        uint8_t *req_ptr;
+        uint32_t req_recipient_channel;
+        uint32_t req_type_len;
+        char req_type[64];
+        uint8_t want_reply;
+
+        /* Receive SSH_MSG_CHANNEL_REQUEST */
+        channel_request_len = recv_packet(client_fd, channel_request, sizeof(channel_request));
+        if (channel_request_len <= 0) {
+            fprintf(stderr, "[-] Failed to receive CHANNEL_REQUEST\n");
+            close(client_fd);
+            return;
+        }
+
+        if (channel_request[0] != SSH_MSG_CHANNEL_REQUEST) {
+            fprintf(stderr, "[-] Expected CHANNEL_REQUEST (98), got %d\n", channel_request[0]);
+            /* This might be a different message (e.g., CHANNEL_DATA), break loop */
+            fprintf(stderr, "[-] Breaking request loop, unexpected message\n");
+            break;
+        }
+
+        /* Parse SSH_MSG_CHANNEL_REQUEST:
+         * byte      SSH_MSG_CHANNEL_REQUEST (98)
+         * uint32    recipient_channel
+         * string    request_type
+         * boolean   want_reply
+         * ... request-specific data (we mostly ignore)
+         */
+        req_ptr = channel_request + 1;
+
+        /* Parse recipient_channel */
+        req_recipient_channel = read_uint32_be(req_ptr);
+        req_ptr += 4;
+
+        /* Parse request_type */
+        req_type_len = read_uint32_be(req_ptr);
+        req_ptr += 4;
+        if (req_type_len >= sizeof(req_type)) {
+            fprintf(stderr, "[-] Request type too long: %u\n", req_type_len);
+            close(client_fd);
+            return;
+        }
+        memcpy(req_type, req_ptr, req_type_len);
+        req_type[req_type_len] = '\0';
+        req_ptr += req_type_len;
+
+        /* Parse want_reply */
+        want_reply = *req_ptr;
+        req_ptr += 1;
+
+        printf("[+] Received SSH_MSG_CHANNEL_REQUEST:\n");
+        printf("    Recipient channel: %u\n", req_recipient_channel);
+        printf("    Request type: %s\n", req_type);
+        printf("    Want reply: %s\n", want_reply ? "yes" : "no");
+
+        /* Verify recipient channel matches our channel */
+        if (req_recipient_channel != server_channel_id) {
+            fprintf(stderr, "[-] Invalid recipient channel: %u (expected %u)\n",
+                    req_recipient_channel, server_channel_id);
+            close(client_fd);
+            return;
+        }
+
+        /* Handle different request types */
+        int request_accepted = 0;
+
+        if (strcmp(req_type, "pty-req") == 0) {
+            /* PTY allocation request
+             * Format: string TERM, uint32 width_chars, uint32 height_rows,
+             *         uint32 width_pixels, uint32 height_pixels, string modes
+             * For minimal implementation: accept but ignore details */
+            printf("[+] Handling pty-req: accepting (ignoring PTY details)\n");
+            request_accepted = 1;
+
+        } else if (strcmp(req_type, "shell") == 0) {
+            /* Shell request - no additional data */
+            printf("[+] Handling shell request: accepting\n");
+            request_accepted = 1;
+            shell_ready = 1;  /* Mark ready to send data */
+            requests_done = 1;  /* Typically shell is the last request */
+
+        } else if (strcmp(req_type, "exec") == 0) {
+            /* Exec request - format: string command
+             * For minimal implementation: accept but ignore command */
+            uint32_t cmd_len = read_uint32_be(req_ptr);
+            char command[256];
+            if (cmd_len < sizeof(command)) {
+                memcpy(command, req_ptr + 4, cmd_len);
+                command[cmd_len] = '\0';
+                printf("[+] Handling exec request: command='%s', accepting\n", command);
+            } else {
+                printf("[+] Handling exec request: accepting (command too long to display)\n");
+            }
+            request_accepted = 1;
+            shell_ready = 1;  /* Ready to send data after exec */
+            requests_done = 1;  /* Exec is typically the last request */
+
+        } else if (strcmp(req_type, "env") == 0) {
+            /* Environment variable request - ignore */
+            printf("[+] Handling env request: ignoring\n");
+            request_accepted = 1;
+
+        } else {
+            /* Unknown request type */
+            printf("[-] Unknown request type: %s, rejecting\n", req_type);
+            request_accepted = 0;
+        }
+
+        /* Send reply if requested */
+        if (want_reply) {
+            uint8_t reply_msg[16];
+            size_t reply_len = 0;
+
+            if (request_accepted) {
+                /* Send SSH_MSG_CHANNEL_SUCCESS */
+                reply_msg[reply_len++] = SSH_MSG_CHANNEL_SUCCESS;
+                write_uint32_be(reply_msg + reply_len, client_channel_id);
+                reply_len += 4;
+
+                if (send_packet(client_fd, reply_msg, reply_len) < 0) {
+                    fprintf(stderr, "[-] Failed to send CHANNEL_SUCCESS\n");
+                    close(client_fd);
+                    return;
+                }
+                printf("[+] Sent SSH_MSG_CHANNEL_SUCCESS\n");
+
+            } else {
+                /* Send SSH_MSG_CHANNEL_FAILURE */
+                reply_msg[reply_len++] = SSH_MSG_CHANNEL_FAILURE;
+                write_uint32_be(reply_msg + reply_len, client_channel_id);
+                reply_len += 4;
+
+                if (send_packet(client_fd, reply_msg, reply_len) < 0) {
+                    fprintf(stderr, "[-] Failed to send CHANNEL_FAILURE\n");
+                    close(client_fd);
+                    return;
+                }
+                printf("[+] Sent SSH_MSG_CHANNEL_FAILURE\n");
+            }
+        }
+    }
+
+    printf("[+] Channel requests complete, shell_ready=%d\n", shell_ready);
+
     /* TODO: Phase 1.14 - Send "Hello World" data */
     /* TODO: Phase 1.15 - Close channel cleanly */
 
-    printf("[+] Closing connection (TODO: implement channel requests and data transfer)\n");
+    printf("[+] Closing connection (TODO: implement data transfer and channel close)\n");
     close(client_fd);
 }
 

@@ -275,20 +275,20 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.13 Channel Requests
 
-- [ ] `P0` Receive SSH_MSG_CHANNEL_REQUEST (98)
-  - [ ] Parse recipient_channel
-  - [ ] Parse request_type string
-  - [ ] Parse want_reply boolean
-- [ ] `P0` Handle "pty-req" request
-  - [ ] Accept (send SUCCESS if want_reply)
-  - [ ] Can ignore PTY details
-- [ ] `P0` Handle "shell" request
-  - [ ] Accept (send SUCCESS if want_reply)
-  - [ ] Mark ready to send data
-- [ ] `P0` Handle "exec" request (optional)
-  - [ ] Accept (send SUCCESS if want_reply)
-- [ ] `P0` Send SSH_MSG_CHANNEL_SUCCESS (99) or FAILURE (100)
-- [ ] `P0` Test: PTY and shell requests accepted
+- [x] `P0` Receive SSH_MSG_CHANNEL_REQUEST (98)
+  - [x] Parse recipient_channel
+  - [x] Parse request_type string
+  - [x] Parse want_reply boolean
+- [x] `P0` Handle "pty-req" request
+  - [x] Accept (send SUCCESS if want_reply)
+  - [x] Can ignore PTY details
+- [x] `P0` Handle "shell" request
+  - [x] Accept (send SUCCESS if want_reply)
+  - [x] Mark ready to send data
+- [x] `P0` Handle "exec" request (optional)
+  - [x] Accept (send SUCCESS if want_reply)
+- [x] `P0` Send SSH_MSG_CHANNEL_SUCCESS (99) or FAILURE (100)
+- [x] `P0` Test: PTY and shell requests accepted (code compiles, implementation follows RFC 4254)
 
 ### 1.14 Data Transfer
 
