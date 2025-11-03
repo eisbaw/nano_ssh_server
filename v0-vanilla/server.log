@@ -1,3 +1,5 @@
+Error: Invalid decrypted packet length: 2555869200
+[-] Failed to receive SERVICE_REQUEST
 =================================
 Nano SSH Server v0-vanilla
 =================================
@@ -12,7 +14,7 @@ Credentials: user / password123
 [+] Waiting for connections...
 
 
-[+] Client connected: 127.0.0.1:19034
+[+] Client connected: 127.0.0.1:50775
 [+] Sent version: SSH-2.0-NanoSSH_0.1
 [+] Received version: SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.14
 [+] Version exchange complete
@@ -43,8 +45,5 @@ Credentials: user / password123
     Send sequence: 3
     Recv sequence: 3
 [+] Key exchange complete!
-[+] Received SSH_MSG_SERVICE_REQUEST: ssh-userauth
-[+] Sent SSH_MSG_SERVICE_ACCEPT
-[+] Closing connection
 
 [+] Server shutting down

@@ -118,11 +118,10 @@ void hash_init(hash_state_t *h) {
  * - MAC key: 32 bytes (HMAC-SHA256)
  */
 typedef struct {
-    uint8_t iv[16];       /* IV for AES-128-CTR */
+    uint8_t iv[16];       /* IV for AES-128-CTR (constant for all packets) */
     uint8_t enc_key[16];  /* AES-128 encryption key */
     uint8_t mac_key[32];  /* HMAC-SHA256 key */
     uint32_t seq_num;     /* Sequence number for MAC */
-    EVP_CIPHER_CTX *ctx;  /* OpenSSL cipher context */
     int active;           /* 1 if encryption is active */
 } crypto_state_t;
 
@@ -426,69 +425,36 @@ int aes_ctr_hmac_encrypt(uint8_t *packet, size_t packet_len,
                          crypto_state_t *state, uint8_t *mac)
 {
     int len;
-    uint8_t iv_copy[16];
+    uint8_t iv_for_packet[16];
 
     /* First, compute MAC over unencrypted packet */
     compute_hmac_sha256(mac, state->mac_key, state->seq_num, packet, packet_len);
 
-    /* Initialize cipher context for this packet (CTR mode) */
-    memcpy(iv_copy, state->iv, 16);  /* Copy IV to avoid modifying original */
+    /* Create fresh cipher context for this packet (to reset counter) */
+    EVP_CIPHER_CTX *pkt_ctx = EVP_CIPHER_CTX_new();
+    if (!pkt_ctx) {
+        fprintf(stderr, "Error: EVP_CIPHER_CTX_new failed\n");
+        return -1;
+    }
 
-    if (!EVP_EncryptInit_ex(state->ctx, EVP_aes_128_ctr(), NULL,
-                            state->enc_key, iv_copy)) {
+    /* For AES-CTR in SSH, use the same IV for all packets */
+    memcpy(iv_for_packet, state->iv, 16);
+
+    if (!EVP_EncryptInit_ex(pkt_ctx, EVP_aes_128_ctr(), NULL,
+                            state->enc_key, iv_for_packet)) {
         fprintf(stderr, "Error: EVP_EncryptInit_ex failed\n");
+        EVP_CIPHER_CTX_free(pkt_ctx);
         return -1;
     }
 
     /* Encrypt packet in-place using AES-128-CTR */
-    if (!EVP_EncryptUpdate(state->ctx, packet, &len, packet, packet_len)) {
+    if (!EVP_EncryptUpdate(pkt_ctx, packet, &len, packet, packet_len)) {
         fprintf(stderr, "Error: EVP_EncryptUpdate failed\n");
+        EVP_CIPHER_CTX_free(pkt_ctx);
         return -1;
     }
 
-    return 0;
-}
-
-/*
- * Decrypt SSH packet using AES-128-CTR + HMAC-SHA256
- *
- * SSH packet decryption (RFC 4253):
- * 1. Decrypt packet with AES-128-CTR
- * 2. Verify MAC = HMAC-SHA256(seq || decrypted_packet)
- * 3. Return decrypted packet if MAC valid
- */
-int aes_ctr_hmac_decrypt(uint8_t *packet, size_t packet_len,
-                         const uint8_t *received_mac,
-                         crypto_state_t *state)
-{
-    uint8_t computed_mac[32];
-    int len;
-    uint8_t iv_copy[16];
-
-    /* Initialize cipher context for this packet (CTR mode) */
-    memcpy(iv_copy, state->iv, 16);  /* Copy IV to avoid modifying original */
-
-    if (!EVP_DecryptInit_ex(state->ctx, EVP_aes_128_ctr(), NULL,
-                            state->enc_key, iv_copy)) {
-        fprintf(stderr, "Error: EVP_DecryptInit_ex failed\n");
-        return -1;
-    }
-
-    /* Decrypt packet in-place (CTR mode decrypt = encrypt) */
-    if (!EVP_DecryptUpdate(state->ctx, packet, &len, packet, packet_len)) {
-        fprintf(stderr, "Error: EVP_DecryptUpdate failed\n");
-        return -1;
-    }
-
-    /* Compute MAC over decrypted packet */
-    compute_hmac_sha256(computed_mac, state->mac_key, state->seq_num, packet, packet_len);
-
-    /* Verify MAC (constant-time comparison) */
-    if (crypto_verify_32(computed_mac, received_mac) != 0) {
-        fprintf(stderr, "Error: HMAC verification failed\n");
-        return -1;
-    }
-
+    EVP_CIPHER_CTX_free(pkt_ctx);
     return 0;
 }
 
@@ -597,26 +563,60 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 
         /* Decrypt first block to extract packet_length */
         uint8_t decrypted_block[16];
-        uint8_t iv_copy[16];
+        uint8_t iv_for_packet[16];
         int len;
 
-        memcpy(iv_copy, encrypt_state_c2s.iv, 16);
-        if (!EVP_DecryptInit_ex(encrypt_state_c2s.ctx, EVP_aes_128_ctr(), NULL,
-                                encrypt_state_c2s.enc_key, iv_copy)) {
-            fprintf(stderr, "Error: EVP_DecryptInit_ex failed\n");
-            return -1;
-        }
-        if (!EVP_DecryptUpdate(encrypt_state_c2s.ctx, decrypted_block, &len,
-                               first_block, 16)) {
-            fprintf(stderr, "Error: EVP_DecryptUpdate failed for first block\n");
+        /* For AES-CTR in SSH, use the same IV for all packets */
+        memcpy(iv_for_packet, encrypt_state_c2s.iv, 16);
+
+        printf("[DEBUG] Seq=%u\n", encrypt_state_c2s.seq_num);
+        printf("  Encrypted (16 bytes): ");
+        for (int i = 0; i < 16; i++) printf("%02x", first_block[i]);
+        printf("\n  IV: ");
+        for (int i = 0; i < 16; i++) printf("%02x", iv_for_packet[i]);
+        printf("\n  Key: ");
+        for (int i = 0; i < 16; i++) printf("%02x", encrypt_state_c2s.enc_key[i]);
+        printf("\n");
+
+        /* Create fresh cipher context for this packet */
+        EVP_CIPHER_CTX *pkt_ctx = EVP_CIPHER_CTX_new();
+        if (!pkt_ctx) {
+            fprintf(stderr, "Error: EVP_CIPHER_CTX_new failed\n");
             return -1;
         }
 
+        if (!EVP_DecryptInit_ex(pkt_ctx, EVP_aes_128_ctr(), NULL,
+                                encrypt_state_c2s.enc_key, iv_for_packet)) {
+            fprintf(stderr, "Error: EVP_DecryptInit_ex failed\n");
+            EVP_CIPHER_CTX_free(pkt_ctx);
+            return -1;
+        }
+        if (!EVP_DecryptUpdate(pkt_ctx, decrypted_block, &len,
+                               first_block, 16)) {
+            fprintf(stderr, "Error: EVP_DecryptUpdate failed for first block\n");
+            EVP_CIPHER_CTX_free(pkt_ctx);
+            return -1;
+        }
+
+        /* Finalize this decryption operation (though CTR mode doesn't pad) */
+        int final_len;
+        uint8_t final_block[16];
+        if (!EVP_DecryptFinal_ex(pkt_ctx, final_block, &final_len)) {
+            /* CTR mode shouldn't fail here, but check anyway */
+            fprintf(stderr, "Warning: EVP_DecryptFinal_ex failed\n");
+        }
+
+        printf("  Decrypted: ");
+        for (int i = 0; i < 16; i++) printf("%02x", decrypted_block[i]);
+        printf("\n");
+
         packet_len = read_uint32_be(decrypted_block);
+        printf("  packet_len=%u\n\n", packet_len);
 
         /* Validate packet length */
         if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
             fprintf(stderr, "Error: Invalid decrypted packet length: %u\n", packet_len);
+            EVP_CIPHER_CTX_free(pkt_ctx);
             return -1;
         }
 
@@ -628,6 +628,7 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
         packet_buf = malloc(total_packet_len);
         if (!packet_buf) {
             fprintf(stderr, "Error: malloc failed\n");
+            EVP_CIPHER_CTX_free(pkt_ctx);
             return -1;
         }
 
@@ -640,6 +641,7 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
             if (!encrypted_remaining) {
                 fprintf(stderr, "Error: malloc failed for remaining\n");
                 free(packet_buf);
+                EVP_CIPHER_CTX_free(pkt_ctx);
                 return -1;
             }
 
@@ -647,26 +649,32 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
             if (n <= 0) {
                 free(encrypted_remaining);
                 free(packet_buf);
+                EVP_CIPHER_CTX_free(pkt_ctx);
                 return n;
             }
             if (n < (ssize_t)remaining) {
                 fprintf(stderr, "Error: Incomplete remaining packet\n");
                 free(encrypted_remaining);
                 free(packet_buf);
+                EVP_CIPHER_CTX_free(pkt_ctx);
                 return -1;
             }
 
             /* Decrypt remaining bytes (continues from first block's CTR state) */
-            if (!EVP_DecryptUpdate(encrypt_state_c2s.ctx, packet_buf + 16, &len,
+            if (!EVP_DecryptUpdate(pkt_ctx, packet_buf + 16, &len,
                                    encrypted_remaining, remaining)) {
                 fprintf(stderr, "Error: EVP_DecryptUpdate failed for remaining\n");
                 free(encrypted_remaining);
                 free(packet_buf);
+                EVP_CIPHER_CTX_free(pkt_ctx);
                 return -1;
             }
 
             free(encrypted_remaining);
         }
+
+        /* Done with this packet's cipher context */
+        EVP_CIPHER_CTX_free(pkt_ctx);
 
         /* Read MAC (32 bytes for HMAC-SHA256) */
         n = recv_data(fd, mac, 32);
@@ -1408,12 +1416,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
      * Activate encryption for OUTGOING packets immediately after sending NEWKEYS */
-    encrypt_state_s2c.ctx = EVP_CIPHER_CTX_new();
-    if (!encrypt_state_s2c.ctx) {
-        fprintf(stderr, "[-] Failed to create cipher context for s2c\n");
-        close(client_fd);
-        return;
-    }
     memcpy(encrypt_state_s2c.iv, iv_s2c, 16);
     memcpy(encrypt_state_s2c.enc_key, key_s2c, 16);
     memcpy(encrypt_state_s2c.mac_key, int_key_s2c, 32);
@@ -1440,12 +1442,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     printf("[+] Received SSH_MSG_NEWKEYS\n");
 
     /* Activate encryption for INCOMING packets immediately after receiving NEWKEYS */
-    encrypt_state_c2s.ctx = EVP_CIPHER_CTX_new();
-    if (!encrypt_state_c2s.ctx) {
-        fprintf(stderr, "[-] Failed to create cipher context for c2s\n");
-        close(client_fd);
-        return;
-    }
     memcpy(encrypt_state_c2s.iv, iv_c2s, 16);
     memcpy(encrypt_state_c2s.enc_key, key_c2s, 16);
     memcpy(encrypt_state_c2s.mac_key, int_key_c2s, 32);
@@ -1517,15 +1513,177 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     printf("[+] Sent SSH_MSG_SERVICE_ACCEPT\n");
 
-    /* TODO: Implement remaining SSH protocol
-     *
-     * Phase 1 tasks (see TODO.md):
-     * 1.11: Authentication - Password auth
-     * 1.12: Channel Open - Session channel
-     * 1.13: Channel Requests - PTY, shell
-     * 1.14: Data Transfer - Send "Hello World"
-     * 1.15: Channel Close - Clean disconnect
+    /* ======================
+     * Phase 1.11: Authentication (Password)
+     * ====================== */
+
+    uint8_t userauth_request[512];
+    ssize_t userauth_request_len;
+    uint8_t *ptr;
+    uint32_t username_len, service_len, method_len, password_len;
+    char username[256];
+    char service[256];
+    char method[256];
+    char password[256];
+    uint8_t change_password;
+
+    /* Receive SSH_MSG_USERAUTH_REQUEST */
+    userauth_request_len = recv_packet(client_fd, userauth_request, sizeof(userauth_request));
+    if (userauth_request_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive USERAUTH_REQUEST\n");
+        close(client_fd);
+        return;
+    }
+
+    if (userauth_request[0] != SSH_MSG_USERAUTH_REQUEST) {
+        fprintf(stderr, "[-] Expected USERAUTH_REQUEST (50), got %d\n", userauth_request[0]);
+        close(client_fd);
+        return;
+    }
+
+    /* Parse USERAUTH_REQUEST:
+     * byte      SSH_MSG_USERAUTH_REQUEST (50)
+     * string    user name
+     * string    service name ("ssh-connection")
+     * string    method name ("password")
+     * boolean   FALSE (change password flag)
+     * string    password
      */
+    ptr = userauth_request + 1;
+
+    /* Parse username */
+    username_len = read_uint32_be(ptr);
+    ptr += 4;
+    if (username_len >= sizeof(username)) {
+        fprintf(stderr, "[-] Username too long: %u\n", username_len);
+        close(client_fd);
+        return;
+    }
+    memcpy(username, ptr, username_len);
+    username[username_len] = '\0';
+    ptr += username_len;
+
+    /* Parse service name */
+    service_len = read_uint32_be(ptr);
+    ptr += 4;
+    if (service_len >= sizeof(service)) {
+        fprintf(stderr, "[-] Service name too long: %u\n", service_len);
+        close(client_fd);
+        return;
+    }
+    memcpy(service, ptr, service_len);
+    service[service_len] = '\0';
+    ptr += service_len;
+
+    /* Parse method name */
+    method_len = read_uint32_be(ptr);
+    ptr += 4;
+    if (method_len >= sizeof(method)) {
+        fprintf(stderr, "[-] Method name too long: %u\n", method_len);
+        close(client_fd);
+        return;
+    }
+    memcpy(method, ptr, method_len);
+    method[method_len] = '\0';
+    ptr += method_len;
+
+    printf("[+] Received USERAUTH_REQUEST:\n");
+    printf("    Username: %s\n", username);
+    printf("    Service: %s\n", service);
+    printf("    Method: %s\n", method);
+
+    /* Verify service is "ssh-connection" */
+    if (strcmp(service, "ssh-connection") != 0) {
+        fprintf(stderr, "[-] Invalid service: %s (expected ssh-connection)\n", service);
+        close(client_fd);
+        return;
+    }
+
+    /* Handle password authentication */
+    if (strcmp(method, "password") == 0) {
+        /* Parse change password flag */
+        change_password = *ptr;
+        ptr += 1;
+
+        /* Parse password */
+        password_len = read_uint32_be(ptr);
+        ptr += 4;
+        if (password_len >= sizeof(password)) {
+            fprintf(stderr, "[-] Password too long: %u\n", password_len);
+            close(client_fd);
+            return;
+        }
+        memcpy(password, ptr, password_len);
+        password[password_len] = '\0';
+
+        printf("    Password: %s\n", password);
+        printf("    Change password: %s\n", change_password ? "yes" : "no");
+
+        /* Validate credentials */
+        if (strcmp(username, VALID_USERNAME) == 0 &&
+            strcmp(password, VALID_PASSWORD) == 0) {
+            /* Authentication successful */
+            printf("[+] Authentication successful\n");
+
+            /* Send SSH_MSG_USERAUTH_SUCCESS */
+            uint8_t success_msg[1];
+            success_msg[0] = SSH_MSG_USERAUTH_SUCCESS;
+
+            if (send_packet(client_fd, success_msg, 1) < 0) {
+                fprintf(stderr, "[-] Failed to send USERAUTH_SUCCESS\n");
+                close(client_fd);
+                return;
+            }
+            printf("[+] Sent SSH_MSG_USERAUTH_SUCCESS\n");
+
+            /* TODO: Continue with channel open, shell, etc. (Phase 1.12+) */
+            printf("[+] Authentication complete, TODO: implement channel open\n");
+        } else {
+            /* Authentication failed */
+            printf("[-] Authentication failed: invalid credentials\n");
+
+            /* Send SSH_MSG_USERAUTH_FAILURE */
+            uint8_t failure_msg[256];
+            size_t failure_len = 0;
+
+            failure_msg[failure_len++] = SSH_MSG_USERAUTH_FAILURE;
+
+            /* Authentications that can continue: "password" */
+            failure_len += write_string(failure_msg + failure_len, "password", 8);
+
+            /* Partial success: FALSE */
+            failure_msg[failure_len++] = 0;
+
+            if (send_packet(client_fd, failure_msg, failure_len) < 0) {
+                fprintf(stderr, "[-] Failed to send USERAUTH_FAILURE\n");
+                close(client_fd);
+                return;
+            }
+            printf("[+] Sent SSH_MSG_USERAUTH_FAILURE\n");
+        }
+    } else {
+        /* Unsupported authentication method */
+        fprintf(stderr, "[-] Unsupported auth method: %s\n", method);
+
+        /* Send SSH_MSG_USERAUTH_FAILURE */
+        uint8_t failure_msg[256];
+        size_t failure_len = 0;
+
+        failure_msg[failure_len++] = SSH_MSG_USERAUTH_FAILURE;
+
+        /* Authentications that can continue: "password" */
+        failure_len += write_string(failure_msg + failure_len, "password", 8);
+
+        /* Partial success: FALSE */
+        failure_msg[failure_len++] = 0;
+
+        if (send_packet(client_fd, failure_msg, failure_len) < 0) {
+            fprintf(stderr, "[-] Failed to send USERAUTH_FAILURE\n");
+            close(client_fd);
+            return;
+        }
+        printf("[+] Sent SSH_MSG_USERAUTH_FAILURE (unsupported method)\n");
+    }
 
     printf("[+] Closing connection\n");
 
