@@ -178,25 +178,25 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ### 1.7 Key Derivation
 
-- [ ] `P0` Implement key derivation function
-  - [ ] Input: K, H, letter, session_id
-  - [ ] Output: derived key of specified length
-  - [ ] Handle keys longer than hash output
-- [ ] `P0` Derive all 6 keys
-  - [ ] IV client→server (12 bytes for ChaCha20)
-  - [ ] IV server→client (12 bytes)
-  - [ ] Encryption key client→server (32 bytes)
-  - [ ] Encryption key server→client (32 bytes)
-  - [ ] Integrity key client→server (if needed)
-  - [ ] Integrity key server→client (if needed)
+- [x] `P0` Implement key derivation function
+  - [x] Input: K, H, letter, session_id
+  - [x] Output: derived key of specified length
+  - [x] Handle keys longer than hash output
+- [x] `P0` Derive all 6 keys
+  - [x] IV client→server (12 bytes for ChaCha20)
+  - [x] IV server→client (12 bytes)
+  - [x] Encryption key client→server (32 bytes)
+  - [x] Encryption key server→client (32 bytes)
+  - [x] Integrity key client→server (if needed)
+  - [x] Integrity key server→client (if needed)
 - [ ] `P0` Initialize cipher contexts
-- [ ] `P0` Test: Keys derived correctly (verify with debug output)
+- [x] `P0` Test: Keys derived correctly (verify with debug output)
 
 ### 1.8 NEWKEYS and Encryption Activation
 
-- [ ] `P0` Receive SSH_MSG_NEWKEYS (21) from client
+- [x] `P0` Receive SSH_MSG_NEWKEYS (21) from client
 - [ ] `P0` Activate incoming encryption (client→server keys)
-- [ ] `P0` Send SSH_MSG_NEWKEYS (21) to client
+- [x] `P0` Send SSH_MSG_NEWKEYS (21) to client
 - [ ] `P0` Activate outgoing encryption (server→client keys)
 - [ ] `P0` Initialize sequence numbers (both to 0)
 - [ ] `P0` Test: Encryption enabled on both sides

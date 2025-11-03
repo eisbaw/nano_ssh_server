@@ -513,6 +513,72 @@ void compute_exchange_hash(uint8_t *hash_out,
     hash_final(&h, hash_out);
 }
 
+/*
+ * Derive key material from shared secret
+ *
+ * key = HASH(K || H || X || session_id)
+ * If more bytes needed: K2 = HASH(K || H || K1), K3 = HASH(K || H || K1 || K2), ...
+ *
+ * Per RFC 4253 Section 7.2
+ */
+void derive_key(uint8_t *key_out, size_t key_len,
+                const uint8_t *shared_secret, size_t shared_len,
+                const uint8_t *exchange_hash,
+                char key_id,  /* 'A' through 'F' */
+                const uint8_t *session_id) {
+    hash_state_t h;
+    uint8_t key_material[256];  /* Should be enough for any key */
+    size_t material_len = 0;
+    size_t needed = key_len;
+    size_t offset = 0;
+
+    /* First round: K1 = HASH(K || H || X || session_id) */
+    hash_init(&h);
+
+    /* K (shared secret) as mpint */
+    {
+        uint8_t mpint_buf[64];
+        size_t mpint_len = write_mpint(mpint_buf, shared_secret, shared_len);
+        hash_update(&h, mpint_buf, mpint_len);
+    }
+
+    /* H (exchange hash) */
+    hash_update(&h, exchange_hash, 32);
+
+    /* X (key identifier) */
+    hash_update(&h, (uint8_t *)&key_id, 1);
+
+    /* session_id */
+    hash_update(&h, session_id, 32);
+
+    hash_final(&h, key_material);
+    material_len = 32;
+
+    /* If we need more key material, generate additional rounds */
+    while (material_len < needed) {
+        hash_init(&h);
+
+        /* K as mpint */
+        {
+            uint8_t mpint_buf[64];
+            size_t mpint_len = write_mpint(mpint_buf, shared_secret, shared_len);
+            hash_update(&h, mpint_buf, mpint_len);
+        }
+
+        /* H */
+        hash_update(&h, exchange_hash, 32);
+
+        /* K1 || K2 || ... (all previous key material) */
+        hash_update(&h, key_material, material_len);
+
+        hash_final(&h, key_material + material_len);
+        material_len += 32;
+    }
+
+    /* Copy requested amount */
+    memcpy(key_out, key_material + offset, key_len);
+}
+
 /* ======================
  * Network Helper Functions
  * ====================== */
@@ -851,11 +917,77 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     printf("[+] Sent KEX_ECDH_REPLY (%zu bytes)\n", kex_reply_len);
 
+    /* ======================
+     * Phase 1.7: Key Derivation
+     * ====================== */
+
+    uint8_t iv_c2s[12];      /* IV client to server (96-bit nonce for ChaCha20) */
+    uint8_t iv_s2c[12];      /* IV server to client */
+    uint8_t key_c2s[32];     /* Encryption key client to server */
+    uint8_t key_s2c[32];     /* Encryption key server to client */
+    uint8_t int_key_c2s[32]; /* Integrity key client to server (unused for ChaCha20-Poly1305) */
+    uint8_t int_key_s2c[32]; /* Integrity key server to client (unused for ChaCha20-Poly1305) */
+
+    /* Derive all keys using session_id and exchange_hash */
+    derive_key(iv_c2s, 12, shared_secret, 32, exchange_hash, 'A', session_id);
+    derive_key(iv_s2c, 12, shared_secret, 32, exchange_hash, 'B', session_id);
+    derive_key(key_c2s, 32, shared_secret, 32, exchange_hash, 'C', session_id);
+    derive_key(key_s2c, 32, shared_secret, 32, exchange_hash, 'D', session_id);
+    derive_key(int_key_c2s, 32, shared_secret, 32, exchange_hash, 'E', session_id);
+    derive_key(int_key_s2c, 32, shared_secret, 32, exchange_hash, 'F', session_id);
+
+    printf("[+] Derived encryption keys:\n");
+    printf("    IV c2s: 12 bytes\n");
+    printf("    IV s2c: 12 bytes\n");
+    printf("    Key c2s: 32 bytes\n");
+    printf("    Key s2c: 32 bytes\n");
+
+    /* ======================
+     * Phase 1.8: NEWKEYS Exchange
+     * ====================== */
+
+    uint8_t newkeys_msg[1];
+    uint8_t recv_newkeys[16];
+    ssize_t newkeys_len;
+
+    /* Send SSH_MSG_NEWKEYS */
+    newkeys_msg[0] = SSH_MSG_NEWKEYS;
+    if (send_packet(client_fd, newkeys_msg, 1) < 0) {
+        fprintf(stderr, "[-] Failed to send NEWKEYS\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_NEWKEYS\n");
+
+    /* Receive SSH_MSG_NEWKEYS from client */
+    newkeys_len = recv_packet(client_fd, recv_newkeys, sizeof(recv_newkeys));
+    if (newkeys_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive NEWKEYS\n");
+        close(client_fd);
+        return;
+    }
+
+    if (recv_newkeys[0] != SSH_MSG_NEWKEYS) {
+        fprintf(stderr, "[-] Expected NEWKEYS (21), got %d\n", recv_newkeys[0]);
+        close(client_fd);
+        return;
+    }
+    printf("[+] Received SSH_MSG_NEWKEYS\n");
+
+    /* TODO: Activate encryption (Phase 1.9)
+     * From this point forward, all packets must be encrypted with ChaCha20-Poly1305
+     * Need to:
+     * 1. Initialize ChaCha20-Poly1305 state for both directions
+     * 2. Track sequence numbers for MAC
+     * 3. Modify send_packet() and recv_packet() to use encryption
+     */
+
+    printf("[+] Key exchange and derivation complete!\n");
+    printf("[!] Encryption not yet activated - Phase 1.9 needed\n");
+
     /* TODO: Implement remaining SSH protocol
      *
      * Phase 1 tasks (see TODO.md):
-     * 1.7: Key Derivation - Derive encryption keys
-     * 1.8: NEWKEYS - Activate encryption
      * 1.9: Encrypted Packets - ChaCha20-Poly1305
      * 1.10: Service Request - ssh-userauth
      * 1.11: Authentication - Password auth
@@ -865,7 +997,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
      * 1.15: Channel Close - Clean disconnect
      */
 
-    printf("[!] SSH protocol not fully implemented yet\n");
     printf("[+] Closing connection\n");
 
     close(client_fd);
