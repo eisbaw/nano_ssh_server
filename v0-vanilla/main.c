@@ -71,6 +71,23 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 #define SSH_MSG_CHANNEL_SUCCESS           99
 #define SSH_MSG_CHANNEL_FAILURE           100
 
+/* SSH disconnect reason codes (RFC 4253 Section 11.1) */
+#define SSH_DISCONNECT_HOST_NOT_ALLOWED_TO_CONNECT    1
+#define SSH_DISCONNECT_PROTOCOL_ERROR                 2
+#define SSH_DISCONNECT_KEY_EXCHANGE_FAILED            3
+#define SSH_DISCONNECT_RESERVED                       4
+#define SSH_DISCONNECT_MAC_ERROR                      5
+#define SSH_DISCONNECT_COMPRESSION_ERROR              6
+#define SSH_DISCONNECT_SERVICE_NOT_AVAILABLE          7
+#define SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED 8
+#define SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE        9
+#define SSH_DISCONNECT_CONNECTION_LOST                10
+#define SSH_DISCONNECT_BY_APPLICATION                 11
+#define SSH_DISCONNECT_TOO_MANY_CONNECTIONS           12
+#define SSH_DISCONNECT_AUTH_CANCELLED_BY_USER         13
+#define SSH_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE 14
+#define SSH_DISCONNECT_ILLEGAL_USER_NAME              15
+
 /* Algorithm names for KEXINIT */
 #define KEX_ALGORITHM           "curve25519-sha256"
 #define HOST_KEY_ALGORITHM      "ssh-ed25519"
@@ -518,6 +535,43 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     }
 
     return 0;
+}
+
+/*
+ * Send SSH_MSG_DISCONNECT message
+ *
+ * Format (RFC 4253 Section 11.1):
+ *   byte      SSH_MSG_DISCONNECT (1)
+ *   uint32    reason_code
+ *   string    description (ISO-10646 UTF-8)
+ *   string    language_tag (empty for minimal implementation)
+ *
+ * This should be sent before closing the connection when an error occurs.
+ */
+void send_disconnect(int fd, uint32_t reason_code, const char *description) {
+    uint8_t disconnect_msg[512];
+    size_t msg_len = 0;
+
+    /* Message type */
+    disconnect_msg[msg_len++] = SSH_MSG_DISCONNECT;
+
+    /* Reason code */
+    write_uint32_be(disconnect_msg + msg_len, reason_code);
+    msg_len += 4;
+
+    /* Description string */
+    size_t desc_len = strlen(description);
+    msg_len += write_string(disconnect_msg + msg_len, description, desc_len);
+
+    /* Language tag (empty) */
+    msg_len += write_string(disconnect_msg + msg_len, "", 0);
+
+    /* Try to send, but don't fail if it doesn't work (connection may already be broken) */
+    if (send_packet(fd, disconnect_msg, msg_len) < 0) {
+        fprintf(stderr, "[-] Warning: Failed to send DISCONNECT message\n");
+    } else {
+        printf("[+] Sent SSH_MSG_DISCONNECT: %s (code %u)\n", description, reason_code);
+    }
 }
 
 /*
@@ -1120,7 +1174,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     for (i = 0; i < (int)sizeof(client_version) - 1; i++) {
         n = recv_data(client_fd, &client_version[i], 1);
         if (n <= 0) {
-            fprintf(stderr, "[-] Failed to receive version string\n");
+            fprintf(stderr, "[-] Failed to receive version string (connection closed or error)\n");
+            /* Network error - can't send disconnect */
             close(client_fd);
             return;
         }
@@ -1130,6 +1185,15 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         if (client_version[i] == '\n') {
             break;
         }
+    }
+
+    /* Check if we hit the buffer limit without finding newline */
+    if (i == (int)sizeof(client_version) - 1 && client_version[i] != '\n') {
+        fprintf(stderr, "[-] Version string too long (> %zu bytes)\n", sizeof(client_version) - 1);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Version string exceeds maximum length");
+        close(client_fd);
+        return;
     }
 
     /* Null-terminate */
@@ -1151,6 +1215,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     if (strncmp(client_version, "SSH-2.0-", 8) != 0) {
         fprintf(stderr, "[-] Invalid SSH version: %s\n", client_version);
         fprintf(stderr, "[-] Expected: SSH-2.0-*\n");
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED,
+                       "Only SSH-2.0 is supported");
         close(client_fd);
         return;
     }
@@ -1181,7 +1247,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Receive client's KEXINIT */
     client_kexinit_len_s = recv_packet(client_fd, client_kexinit, sizeof(client_kexinit));
     if (client_kexinit_len_s <= 0) {
-        fprintf(stderr, "[-] Failed to receive client KEXINIT\n");
+        fprintf(stderr, "[-] Failed to receive client KEXINIT (connection error)\n");
+        /* Network error - connection likely closed, can't send disconnect */
         close(client_fd);
         return;
     }
@@ -1190,6 +1257,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Validate it's a KEXINIT message */
     if (client_kexinit[0] != SSH_MSG_KEXINIT) {
         fprintf(stderr, "[-] Expected KEXINIT (20), got message type %d\n", client_kexinit[0]);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Expected KEXINIT message");
         close(client_fd);
         return;
     }
@@ -1237,6 +1306,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     if (kex_init_msg[0] != SSH_MSG_KEX_ECDH_INIT) {
         fprintf(stderr, "[-] Expected KEX_ECDH_INIT (30), got %d\n", kex_init_msg[0]);
+        send_disconnect(client_fd, SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
+                       "Expected KEX_ECDH_INIT message");
         close(client_fd);
         return;
     }
@@ -1464,6 +1535,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     if (service_request[0] != SSH_MSG_SERVICE_REQUEST) {
         fprintf(stderr, "[-] Expected SERVICE_REQUEST (5), got %d\n", service_request[0]);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Expected SERVICE_REQUEST message");
         close(client_fd);
         return;
     }
@@ -1482,6 +1555,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Verify service name is "ssh-userauth" */
     if (strcmp(service_name, "ssh-userauth") != 0) {
         fprintf(stderr, "[-] Unsupported service: %s\n", service_name);
+        send_disconnect(client_fd, SSH_DISCONNECT_SERVICE_NOT_AVAILABLE,
+                       "Only ssh-userauth service is supported");
         close(client_fd);
         return;
     }
@@ -1676,10 +1751,399 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }  /* End authentication loop */
 
     /* Authentication successful - continue with channel open, shell, etc. */
-    printf("[+] Authentication complete, TODO: implement channel open (Phase 1.12+)\n");
+    printf("[+] Authentication complete\n");
 
-    printf("[+] Closing connection\n");
+    /* ======================
+     * Phase 1.12: Channel Open
+     * ====================== */
+
+    uint8_t channel_open_msg[512];
+    ssize_t channel_open_len;
+    uint8_t *ch_ptr;
+    uint32_t channel_type_len;
+    char channel_type[64];
+    uint32_t client_channel_id;
+    uint32_t client_window_size;
+    uint32_t client_max_packet;
+    uint32_t server_channel_id = 0;  /* We assign channel ID 0 */
+    uint32_t server_window_size = 32768;
+    uint32_t server_max_packet = 16384;
+
+    /* Receive SSH_MSG_CHANNEL_OPEN */
+    channel_open_len = recv_packet(client_fd, channel_open_msg, sizeof(channel_open_msg));
+    if (channel_open_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive CHANNEL_OPEN\n");
+        close(client_fd);
+        return;
+    }
+
+    if (channel_open_msg[0] != SSH_MSG_CHANNEL_OPEN) {
+        fprintf(stderr, "[-] Expected CHANNEL_OPEN (90), got %d\n", channel_open_msg[0]);
+        close(client_fd);
+        return;
+    }
+
+    /* Parse SSH_MSG_CHANNEL_OPEN:
+     * byte      SSH_MSG_CHANNEL_OPEN (90)
+     * string    channel_type
+     * uint32    sender_channel (client's channel ID)
+     * uint32    initial_window_size
+     * uint32    maximum_packet_size
+     */
+    ch_ptr = channel_open_msg + 1;
+
+    /* Parse channel type */
+    channel_type_len = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+    if (channel_type_len >= sizeof(channel_type)) {
+        fprintf(stderr, "[-] Channel type too long: %u\n", channel_type_len);
+        close(client_fd);
+        return;
+    }
+    memcpy(channel_type, ch_ptr, channel_type_len);
+    channel_type[channel_type_len] = '\0';
+    ch_ptr += channel_type_len;
+
+    /* Parse sender_channel (client's channel ID) */
+    client_channel_id = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+
+    /* Parse initial_window_size */
+    client_window_size = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+
+    /* Parse maximum_packet_size */
+    client_max_packet = read_uint32_be(ch_ptr);
+    ch_ptr += 4;
+
+    printf("[+] Received SSH_MSG_CHANNEL_OPEN:\n");
+    printf("    Channel type: %s\n", channel_type);
+    printf("    Client channel ID: %u\n", client_channel_id);
+    printf("    Client window size: %u\n", client_window_size);
+    printf("    Client max packet: %u\n", client_max_packet);
+
+    /* Verify channel type is "session" */
+    if (strcmp(channel_type, "session") != 0) {
+        fprintf(stderr, "[-] Unsupported channel type: %s\n", channel_type);
+        /* Send SSH_MSG_CHANNEL_OPEN_FAILURE */
+        uint8_t open_failure[256];
+        size_t failure_len = 0;
+
+        open_failure[failure_len++] = SSH_MSG_CHANNEL_OPEN_FAILURE;
+        write_uint32_be(open_failure + failure_len, client_channel_id);  /* recipient_channel */
+        failure_len += 4;
+        write_uint32_be(open_failure + failure_len, 3);  /* SSH_OPEN_UNKNOWN_CHANNEL_TYPE */
+        failure_len += 4;
+        failure_len += write_string(open_failure + failure_len, "Unknown channel type", 20);
+        failure_len += write_string(open_failure + failure_len, "", 0);  /* language tag */
+
+        send_packet(client_fd, open_failure, failure_len);
+        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
+                       "Only session channel type is supported");
+        close(client_fd);
+        return;
+    }
+
+    /* Build SSH_MSG_CHANNEL_OPEN_CONFIRMATION */
+    uint8_t channel_confirm[256];
+    size_t channel_confirm_len = 0;
+
+    channel_confirm[channel_confirm_len++] = SSH_MSG_CHANNEL_OPEN_CONFIRMATION;
+
+    /* recipient_channel (client's channel ID) */
+    write_uint32_be(channel_confirm + channel_confirm_len, client_channel_id);
+    channel_confirm_len += 4;
+
+    /* sender_channel (server's channel ID) */
+    write_uint32_be(channel_confirm + channel_confirm_len, server_channel_id);
+    channel_confirm_len += 4;
+
+    /* initial_window_size (server's receive window) */
+    write_uint32_be(channel_confirm + channel_confirm_len, server_window_size);
+    channel_confirm_len += 4;
+
+    /* maximum_packet_size (server's max packet) */
+    write_uint32_be(channel_confirm + channel_confirm_len, server_max_packet);
+    channel_confirm_len += 4;
+
+    /* Send SSH_MSG_CHANNEL_OPEN_CONFIRMATION */
+    if (send_packet(client_fd, channel_confirm, channel_confirm_len) < 0) {
+        fprintf(stderr, "[-] Failed to send CHANNEL_OPEN_CONFIRMATION\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_CHANNEL_OPEN_CONFIRMATION:\n");
+    printf("    Server channel ID: %u\n", server_channel_id);
+    printf("    Server window size: %u\n", server_window_size);
+    printf("    Server max packet: %u\n", server_max_packet);
+    printf("[+] Channel opened successfully\n");
+
+    /* Store channel state (for future use in Phase 1.14+) */
+    /* For now, we just have local variables. In a production server, we'd
+     * store this in a channel state structure. */
+
+    /* ======================
+     * Phase 1.13: Channel Requests
+     * ====================== */
+
+    /* Clients typically send multiple channel requests:
+     * 1. pty-req (PTY allocation)
+     * 2. shell or exec (what to run)
+     * We need to handle these in a loop */
+
+    int shell_ready = 0;  /* Flag: ready to send data after shell request */
+    int requests_done = 0;
+
+    while (!requests_done) {
+        uint8_t channel_request[4096];
+        ssize_t channel_request_len;
+        uint8_t *req_ptr;
+        uint32_t req_recipient_channel;
+        uint32_t req_type_len;
+        char req_type[64];
+        uint8_t want_reply;
+
+        /* Receive SSH_MSG_CHANNEL_REQUEST */
+        channel_request_len = recv_packet(client_fd, channel_request, sizeof(channel_request));
+        if (channel_request_len <= 0) {
+            fprintf(stderr, "[-] Failed to receive CHANNEL_REQUEST\n");
+            close(client_fd);
+            return;
+        }
+
+        if (channel_request[0] != SSH_MSG_CHANNEL_REQUEST) {
+            fprintf(stderr, "[-] Expected CHANNEL_REQUEST (98), got %d\n", channel_request[0]);
+            /* This might be a different message (e.g., CHANNEL_DATA), break loop */
+            fprintf(stderr, "[-] Breaking request loop, unexpected message\n");
+            break;
+        }
+
+        /* Parse SSH_MSG_CHANNEL_REQUEST:
+         * byte      SSH_MSG_CHANNEL_REQUEST (98)
+         * uint32    recipient_channel
+         * string    request_type
+         * boolean   want_reply
+         * ... request-specific data (we mostly ignore)
+         */
+        req_ptr = channel_request + 1;
+
+        /* Parse recipient_channel */
+        req_recipient_channel = read_uint32_be(req_ptr);
+        req_ptr += 4;
+
+        /* Parse request_type */
+        req_type_len = read_uint32_be(req_ptr);
+        req_ptr += 4;
+        if (req_type_len >= sizeof(req_type)) {
+            fprintf(stderr, "[-] Request type too long: %u\n", req_type_len);
+            close(client_fd);
+            return;
+        }
+        memcpy(req_type, req_ptr, req_type_len);
+        req_type[req_type_len] = '\0';
+        req_ptr += req_type_len;
+
+        /* Parse want_reply */
+        want_reply = *req_ptr;
+        req_ptr += 1;
+
+        printf("[+] Received SSH_MSG_CHANNEL_REQUEST:\n");
+        printf("    Recipient channel: %u\n", req_recipient_channel);
+        printf("    Request type: %s\n", req_type);
+        printf("    Want reply: %s\n", want_reply ? "yes" : "no");
+
+        /* Verify recipient channel matches our channel */
+        if (req_recipient_channel != server_channel_id) {
+            fprintf(stderr, "[-] Invalid recipient channel: %u (expected %u)\n",
+                    req_recipient_channel, server_channel_id);
+            close(client_fd);
+            return;
+        }
+
+        /* Handle different request types */
+        int request_accepted = 0;
+
+        if (strcmp(req_type, "pty-req") == 0) {
+            /* PTY allocation request
+             * Format: string TERM, uint32 width_chars, uint32 height_rows,
+             *         uint32 width_pixels, uint32 height_pixels, string modes
+             * For minimal implementation: accept but ignore details */
+            printf("[+] Handling pty-req: accepting (ignoring PTY details)\n");
+            request_accepted = 1;
+
+        } else if (strcmp(req_type, "shell") == 0) {
+            /* Shell request - no additional data */
+            printf("[+] Handling shell request: accepting\n");
+            request_accepted = 1;
+            shell_ready = 1;  /* Mark ready to send data */
+            requests_done = 1;  /* Typically shell is the last request */
+
+        } else if (strcmp(req_type, "exec") == 0) {
+            /* Exec request - format: string command
+             * For minimal implementation: accept but ignore command */
+            uint32_t cmd_len = read_uint32_be(req_ptr);
+            char command[256];
+            if (cmd_len < sizeof(command)) {
+                memcpy(command, req_ptr + 4, cmd_len);
+                command[cmd_len] = '\0';
+                printf("[+] Handling exec request: command='%s', accepting\n", command);
+            } else {
+                printf("[+] Handling exec request: accepting (command too long to display)\n");
+            }
+            request_accepted = 1;
+            shell_ready = 1;  /* Ready to send data after exec */
+            requests_done = 1;  /* Exec is typically the last request */
+
+        } else if (strcmp(req_type, "env") == 0) {
+            /* Environment variable request - ignore */
+            printf("[+] Handling env request: ignoring\n");
+            request_accepted = 1;
+
+        } else {
+            /* Unknown request type */
+            printf("[-] Unknown request type: %s, rejecting\n", req_type);
+            request_accepted = 0;
+        }
+
+        /* Send reply if requested */
+        if (want_reply) {
+            uint8_t reply_msg[16];
+            size_t reply_len = 0;
+
+            if (request_accepted) {
+                /* Send SSH_MSG_CHANNEL_SUCCESS */
+                reply_msg[reply_len++] = SSH_MSG_CHANNEL_SUCCESS;
+                write_uint32_be(reply_msg + reply_len, client_channel_id);
+                reply_len += 4;
+
+                if (send_packet(client_fd, reply_msg, reply_len) < 0) {
+                    fprintf(stderr, "[-] Failed to send CHANNEL_SUCCESS\n");
+                    close(client_fd);
+                    return;
+                }
+                printf("[+] Sent SSH_MSG_CHANNEL_SUCCESS\n");
+
+            } else {
+                /* Send SSH_MSG_CHANNEL_FAILURE */
+                reply_msg[reply_len++] = SSH_MSG_CHANNEL_FAILURE;
+                write_uint32_be(reply_msg + reply_len, client_channel_id);
+                reply_len += 4;
+
+                if (send_packet(client_fd, reply_msg, reply_len) < 0) {
+                    fprintf(stderr, "[-] Failed to send CHANNEL_FAILURE\n");
+                    close(client_fd);
+                    return;
+                }
+                printf("[+] Sent SSH_MSG_CHANNEL_FAILURE\n");
+            }
+        }
+    }
+
+    printf("[+] Channel requests complete, shell_ready=%d\n", shell_ready);
+
+    /* ======================
+     * Phase 1.14: Data Transfer
+     * ====================== */
+
+    if (shell_ready) {
+        const char *hello_msg = "Hello World\r\n";
+        size_t hello_len = strlen(hello_msg);
+        uint8_t data_msg[1024];
+        size_t data_msg_len = 0;
+
+        /* Build SSH_MSG_CHANNEL_DATA:
+         * byte      SSH_MSG_CHANNEL_DATA (94)
+         * uint32    recipient_channel (client's channel ID)
+         * string    data (length-prefixed)
+         */
+        data_msg[data_msg_len++] = SSH_MSG_CHANNEL_DATA;
+
+        /* recipient_channel = client's channel ID */
+        write_uint32_be(data_msg + data_msg_len, client_channel_id);
+        data_msg_len += 4;
+
+        /* data as SSH string (length + content) */
+        data_msg_len += write_string(data_msg + data_msg_len, hello_msg, hello_len);
+
+        /* Check window size before sending */
+        if (hello_len > client_window_size) {
+            fprintf(stderr, "[-] Warning: Data exceeds client window size (%zu > %u)\n",
+                    hello_len, client_window_size);
+            /* In production, we'd need to split data or wait for WINDOW_ADJUST */
+            /* For now, send anyway since our message is small */
+        }
+
+        /* Send the data */
+        if (send_packet(client_fd, data_msg, data_msg_len) < 0) {
+            fprintf(stderr, "[-] Failed to send CHANNEL_DATA\n");
+            close(client_fd);
+            return;
+        }
+        printf("[+] Sent SSH_MSG_CHANNEL_DATA: \"%s\" (%zu bytes)\n", hello_msg, hello_len);
+
+        /* Update client window size (track how much we've sent) */
+        client_window_size -= hello_len;
+        printf("[+] Client window size remaining: %u bytes\n", client_window_size);
+
+    } else {
+        printf("[+] Shell not ready, skipping data transfer\n");
+    }
+
+    /* ======================
+     * Phase 1.15: Channel Close
+     * ====================== */
+
+    printf("[+] Closing channel...\n");
+
+    /* Send SSH_MSG_CHANNEL_EOF (no more data) */
+    uint8_t eof_msg[16];
+    size_t eof_len = 0;
+
+    eof_msg[eof_len++] = SSH_MSG_CHANNEL_EOF;
+    write_uint32_be(eof_msg + eof_len, client_channel_id);
+    eof_len += 4;
+
+    if (send_packet(client_fd, eof_msg, eof_len) < 0) {
+        fprintf(stderr, "[-] Failed to send CHANNEL_EOF\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_CHANNEL_EOF\n");
+
+    /* Send SSH_MSG_CHANNEL_CLOSE */
+    uint8_t close_msg[16];
+    size_t close_len = 0;
+
+    close_msg[close_len++] = SSH_MSG_CHANNEL_CLOSE;
+    write_uint32_be(close_msg + close_len, client_channel_id);
+    close_len += 4;
+
+    if (send_packet(client_fd, close_msg, close_len) < 0) {
+        fprintf(stderr, "[-] Failed to send CHANNEL_CLOSE\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_CHANNEL_CLOSE\n");
+
+    /* Wait for client's SSH_MSG_CHANNEL_CLOSE */
+    uint8_t client_close[16];
+    ssize_t client_close_len;
+
+    client_close_len = recv_packet(client_fd, client_close, sizeof(client_close));
+    if (client_close_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive CHANNEL_CLOSE from client (connection may already be closed)\n");
+        /* This is acceptable - client may have already closed */
+    } else if (client_close[0] != SSH_MSG_CHANNEL_CLOSE) {
+        fprintf(stderr, "[-] Expected CHANNEL_CLOSE (97), got %d\n", client_close[0]);
+        /* Non-fatal, continue with cleanup */
+    } else {
+        printf("[+] Received SSH_MSG_CHANNEL_CLOSE from client\n");
+    }
+
+    /* Close TCP connection */
+    printf("[+] Closing TCP connection\n");
     close(client_fd);
+    printf("[+] Connection closed successfully\n");
 }
 
 int main(int argc, char *argv[]) {
