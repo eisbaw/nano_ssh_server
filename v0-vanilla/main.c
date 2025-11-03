@@ -104,10 +104,14 @@ void hash_init(hash_state_t *h) {
 }
 
 /*
- * Encryption state for ChaCha20-Poly1305
+ * Encryption state for ChaCha20-Poly1305 (OpenSSH variant)
+ *
+ * OpenSSH ChaCha20-Poly1305 requires 512 bits (64 bytes) of key material:
+ * - K_1 (first 32 bytes): encrypts packet length
+ * - K_2 (last 32 bytes): encrypts payload and generates Poly1305 key
  */
 typedef struct {
-    uint8_t key[32];      /* Encryption key */
+    uint8_t key[64];      /* Encryption key: K_1 || K_2 */
     uint32_t seq_num;     /* Sequence number for nonce */
     int active;           /* 1 if encryption is active */
 } crypto_state_t;
@@ -182,6 +186,20 @@ void write_uint32_be(uint8_t *buf, uint32_t value) {
 }
 
 /*
+ * Write 64-bit unsigned integer in big-endian format (for ChaCha20 nonce)
+ */
+void write_uint64_be(uint8_t *buf, uint64_t value) {
+    buf[0] = (value >> 56) & 0xFF;
+    buf[1] = (value >> 48) & 0xFF;
+    buf[2] = (value >> 40) & 0xFF;
+    buf[3] = (value >> 32) & 0xFF;
+    buf[4] = (value >> 24) & 0xFF;
+    buf[5] = (value >> 16) & 0xFF;
+    buf[6] = (value >> 8) & 0xFF;
+    buf[7] = value & 0xFF;
+}
+
+/*
  * Read uint32 in big-endian format
  */
 uint32_t read_uint32_be(const uint8_t *buf) {
@@ -250,37 +268,40 @@ uint8_t calculate_padding(size_t payload_len, size_t block_size) {
 /*
  * Encrypt SSH packet using ChaCha20-Poly1305 (OpenSSH variant)
  *
- * OpenSSH uses a two-key variant:
- * - K_1 (counter=0): Encrypts packet_length (first 4 bytes)
- * - K_2 (counter=1): Encrypts rest of packet
- * - Poly1305 key derived from counter=0
+ * OpenSSH uses a two-key variant (PROTOCOL.chacha20poly1305):
+ * - K_1 (key[0..31]): Encrypts packet_length (4 bytes) only
+ * - K_2 (key[32..63]): Encrypts payload, generates Poly1305 key
+ * - Poly1305 key: first 32 bytes of ChaCha20(K_2, nonce, counter=0)
  * - Nonce: 8 zero bytes + 4-byte sequence number (big-endian)
  *
  * Input: unencrypted packet (packet_length || padding_length || payload || padding)
  * Output: encrypted packet_length || encrypted rest || MAC
+ * Parameter key: 64 bytes (K_1 || K_2)
  */
 int chacha20_poly1305_encrypt(uint8_t *packet, size_t packet_len,
-                               const uint8_t key[32], uint32_t seq_num,
+                               const uint8_t key[64], uint32_t seq_num,
                                uint8_t mac[16])
 {
+    const uint8_t *k1 = key;          /* First 32 bytes */
+    const uint8_t *k2 = key + 32;     /* Last 32 bytes */
     uint8_t nonce[12];
     uint8_t poly_key[32];
 
-    /* Build nonce: 8 zero bytes + 4-byte sequence number (big-endian) */
-    memset(nonce, 0, 8);
-    write_uint32_be(nonce + 8, seq_num);
+    /* Build nonce per OpenSSH spec: 4 zero bytes + 8-byte sequence number (uint64 big-endian) */
+    memset(nonce, 0, 4);
+    write_uint64_be(nonce + 4, (uint64_t)seq_num);
 
-    /* Generate Poly1305 key from ChaCha20(key, nonce, counter=0) */
+    /* Generate Poly1305 key from ChaCha20(K_2, nonce, counter=0) */
     memset(poly_key, 0, 32);
-    crypto_stream_chacha20_ietf_xor_ic(poly_key, poly_key, 32, nonce, 0, key);
+    crypto_stream_chacha20_ietf_xor_ic(poly_key, poly_key, 32, nonce, 0, k2);
 
-    /* Encrypt packet_length (first 4 bytes) with counter=0 */
-    crypto_stream_chacha20_ietf_xor_ic(packet, packet, 4, nonce, 0, key);
+    /* Encrypt packet_length (first 4 bytes) with K_1 */
+    crypto_stream_chacha20_ietf_xor_ic(packet, packet, 4, nonce, 0, k1);
 
-    /* Encrypt rest of packet with counter=1 */
+    /* Encrypt rest of packet with K_2, counter=1 (skip Poly1305 key block) */
     if (packet_len > 4) {
         crypto_stream_chacha20_ietf_xor_ic(packet + 4, packet + 4, packet_len - 4,
-                                           nonce, 1, key);
+                                           nonce, 1, k2);
     }
 
     /* Compute Poly1305 MAC over encrypted packet */
@@ -296,25 +317,33 @@ int chacha20_poly1305_encrypt(uint8_t *packet, size_t packet_len,
 /*
  * Decrypt SSH packet using ChaCha20-Poly1305 (OpenSSH variant)
  *
+ * OpenSSH uses a two-key variant (PROTOCOL.chacha20poly1305):
+ * - K_1 (key[0..31]): Decrypts packet_length (4 bytes) only
+ * - K_2 (key[32..63]): Decrypts payload, generates Poly1305 key
+ * - Poly1305 key: first 32 bytes of ChaCha20(K_2, nonce, counter=0)
+ *
  * Input: encrypted packet_length || encrypted rest, MAC (separate)
  * Output: decrypted packet (packet_length || padding_length || payload || padding)
+ * Parameter key: 64 bytes (K_1 || K_2)
  * Returns: 0 on success, -1 on MAC verification failure
  */
 int chacha20_poly1305_decrypt(uint8_t *packet, size_t packet_len,
                                const uint8_t mac[16],
-                               const uint8_t key[32], uint32_t seq_num)
+                               const uint8_t key[64], uint32_t seq_num)
 {
+    const uint8_t *k1 = key;          /* First 32 bytes */
+    const uint8_t *k2 = key + 32;     /* Last 32 bytes */
     uint8_t nonce[12];
     uint8_t poly_key[32];
     int mac_valid;
 
-    /* Build nonce: 8 zero bytes + 4-byte sequence number (big-endian) */
-    memset(nonce, 0, 8);
-    write_uint32_be(nonce + 8, seq_num);
+    /* Build nonce per OpenSSH spec: 4 zero bytes + 8-byte sequence number (uint64 big-endian) */
+    memset(nonce, 0, 4);
+    write_uint64_be(nonce + 4, (uint64_t)seq_num);
 
-    /* Generate Poly1305 key from ChaCha20(key, nonce, counter=0) */
+    /* Generate Poly1305 key from ChaCha20(K_2, nonce, counter=0) */
     memset(poly_key, 0, 32);
-    crypto_stream_chacha20_ietf_xor_ic(poly_key, poly_key, 32, nonce, 0, key);
+    crypto_stream_chacha20_ietf_xor_ic(poly_key, poly_key, 32, nonce, 0, k2);
 
     /* Verify Poly1305 MAC over encrypted packet */
     mac_valid = crypto_onetimeauth_poly1305_verify(mac, packet, packet_len, poly_key);
@@ -328,13 +357,13 @@ int chacha20_poly1305_decrypt(uint8_t *packet, size_t packet_len,
         return -1;
     }
 
-    /* Decrypt packet_length (first 4 bytes) with counter=0 */
-    crypto_stream_chacha20_ietf_xor_ic(packet, packet, 4, nonce, 0, key);
+    /* Decrypt packet_length (first 4 bytes) with K_1 */
+    crypto_stream_chacha20_ietf_xor_ic(packet, packet, 4, nonce, 0, k1);
 
-    /* Decrypt rest of packet with counter=1 */
+    /* Decrypt rest of packet with K_2, counter=1 (skip Poly1305 key block) */
     if (packet_len > 4) {
         crypto_stream_chacha20_ietf_xor_ic(packet + 4, packet + 4, packet_len - 4,
-                                           nonce, 1, key);
+                                           nonce, 1, k2);
     }
 
     /* Clear nonce */
@@ -458,15 +487,19 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
          */
 
         /* Decrypt packet_length to determine how much to read */
+        printf("[DEBUG] Encrypted packet_length: %02x %02x %02x %02x\n",
+               header[0], header[1], header[2], header[3]);
+        printf("[DEBUG] Using K_1 (first 32 bytes of key), seq=%u\n", encrypt_state_c2s.seq_num);
         {
             uint8_t nonce[12];
-            memset(nonce, 0, 8);
-            write_uint32_be(nonce + 8, encrypt_state_c2s.seq_num);
+            memset(nonce, 0, 4);
+            write_uint64_be(nonce + 4, (uint64_t)encrypt_state_c2s.seq_num);
             crypto_stream_chacha20_ietf_xor_ic(header, header, 4, nonce, 0,
                                                 encrypt_state_c2s.key);
         }
 
         packet_len = read_uint32_be(header);
+        printf("[DEBUG] Decrypted packet_length: %u (0x%08x)\n", packet_len, packet_len);
 
         /* Validate packet length */
         if (packet_len < 5 || packet_len > MAX_PACKET_SIZE) {
@@ -485,8 +518,8 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
         /* Put encrypted length back into buffer (for MAC verification) */
         {
             uint8_t nonce_reenc[12];
-            memset(nonce_reenc, 0, 8);
-            write_uint32_be(nonce_reenc + 8, encrypt_state_c2s.seq_num);
+            memset(nonce_reenc, 0, 4);
+            write_uint64_be(nonce_reenc + 4, (uint64_t)encrypt_state_c2s.seq_num);
             crypto_stream_chacha20_ietf_xor_ic(header, header, 4, nonce_reenc, 0,
                                                 encrypt_state_c2s.key);
         }
@@ -1192,26 +1225,30 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
      * Phase 1.7: Key Derivation
      * ====================== */
 
-    uint8_t iv_c2s[12];      /* IV client to server (96-bit nonce for ChaCha20) */
-    uint8_t iv_s2c[12];      /* IV server to client */
-    uint8_t key_c2s[32];     /* Encryption key client to server */
-    uint8_t key_s2c[32];     /* Encryption key server to client */
+    uint8_t iv_c2s[12];      /* IV client to server (96-bit nonce for ChaCha20) - unused */
+    uint8_t iv_s2c[12];      /* IV server to client - unused */
+    uint8_t key_c2s[64];     /* Encryption key client to server (K_1 || K_2) for ChaCha20-Poly1305 */
+    uint8_t key_s2c[64];     /* Encryption key server to client (K_1 || K_2) for ChaCha20-Poly1305 */
     uint8_t int_key_c2s[32]; /* Integrity key client to server (unused for ChaCha20-Poly1305) */
     uint8_t int_key_s2c[32]; /* Integrity key server to client (unused for ChaCha20-Poly1305) */
 
-    /* Derive all keys using session_id and exchange_hash */
+    /* Derive all keys using session_id and exchange_hash
+     * For ChaCha20-Poly1305, we need 64 bytes (512 bits) per direction:
+     * - K_1 (first 32 bytes): encrypts packet length
+     * - K_2 (last 32 bytes): encrypts payload and generates Poly1305 key
+     */
     derive_key(iv_c2s, 12, shared_secret, 32, exchange_hash, 'A', session_id);
     derive_key(iv_s2c, 12, shared_secret, 32, exchange_hash, 'B', session_id);
-    derive_key(key_c2s, 32, shared_secret, 32, exchange_hash, 'C', session_id);
-    derive_key(key_s2c, 32, shared_secret, 32, exchange_hash, 'D', session_id);
+    derive_key(key_c2s, 64, shared_secret, 32, exchange_hash, 'C', session_id);  /* 64 bytes! */
+    derive_key(key_s2c, 64, shared_secret, 32, exchange_hash, 'D', session_id);  /* 64 bytes! */
     derive_key(int_key_c2s, 32, shared_secret, 32, exchange_hash, 'E', session_id);
     derive_key(int_key_s2c, 32, shared_secret, 32, exchange_hash, 'F', session_id);
 
     printf("[+] Derived encryption keys:\n");
     printf("    IV c2s: 12 bytes\n");
     printf("    IV s2c: 12 bytes\n");
-    printf("    Key c2s: 32 bytes\n");
-    printf("    Key s2c: 32 bytes\n");
+    printf("    Key c2s: 64 bytes (K_1 || K_2)\n");
+    printf("    Key s2c: 64 bytes (K_1 || K_2)\n");
 
     /* ======================
      * Phase 1.8: NEWKEYS Exchange
@@ -1236,7 +1273,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
      * Activate encryption for OUTGOING packets immediately after sending NEWKEYS */
-    memcpy(encrypt_state_s2c.key, key_s2c, 32);
+    memcpy(encrypt_state_s2c.key, key_s2c, 64);  /* Copy all 64 bytes (K_1 || K_2) */
     encrypt_state_s2c.seq_num = 0;
     encrypt_state_s2c.active = 1;
     printf("[+] Activated outgoing encryption (server→client)\n");
@@ -1257,10 +1294,16 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     printf("[+] Received SSH_MSG_NEWKEYS\n");
 
     /* Activate encryption for INCOMING packets immediately after receiving NEWKEYS */
-    memcpy(encrypt_state_c2s.key, key_c2s, 32);
+    memcpy(encrypt_state_c2s.key, key_c2s, 64);  /* Copy all 64 bytes (K_1 || K_2) */
     encrypt_state_c2s.seq_num = 0;
     encrypt_state_c2s.active = 1;
     printf("[+] Activated incoming encryption (client→server)\n");
+    printf("[DEBUG] K_1 (c2s): %02x %02x %02x %02x...\n",
+           encrypt_state_c2s.key[0], encrypt_state_c2s.key[1],
+           encrypt_state_c2s.key[2], encrypt_state_c2s.key[3]);
+    printf("[DEBUG] K_2 (c2s): %02x %02x %02x %02x...\n",
+           encrypt_state_c2s.key[32], encrypt_state_c2s.key[33],
+           encrypt_state_c2s.key[34], encrypt_state_c2s.key[35]);
 
     printf("[+] Encryption fully activated (ChaCha20-Poly1305)\n");
     printf("    Send sequence: %u\n", encrypt_state_s2c.seq_num);
