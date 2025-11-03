@@ -483,13 +483,13 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
         }
 
         /* Put encrypted length back into buffer (for MAC verification) */
-        crypto_stream_chacha20_ietf_xor_ic(header, header, 4,
-                                            (uint8_t[]){0,0,0,0,0,0,0,0,
-                                                       (encrypt_state_c2s.seq_num >> 24) & 0xFF,
-                                                       (encrypt_state_c2s.seq_num >> 16) & 0xFF,
-                                                       (encrypt_state_c2s.seq_num >> 8) & 0xFF,
-                                                       encrypt_state_c2s.seq_num & 0xFF},
-                                            0, encrypt_state_c2s.key);
+        {
+            uint8_t nonce_reenc[12];
+            memset(nonce_reenc, 0, 8);
+            write_uint32_be(nonce_reenc + 8, encrypt_state_c2s.seq_num);
+            crypto_stream_chacha20_ietf_xor_ic(header, header, 4, nonce_reenc, 0,
+                                                encrypt_state_c2s.key);
+        }
         memcpy(packet_buf, header, 4);
 
         /* Read rest of encrypted packet */
@@ -1230,7 +1230,18 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     printf("[+] Sent SSH_MSG_NEWKEYS\n");
 
-    /* Receive SSH_MSG_NEWKEYS from client */
+    /* ======================
+     * Phase 1.9: Activate Encryption (Server→Client)
+     * ====================== */
+
+    /* RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
+     * Activate encryption for OUTGOING packets immediately after sending NEWKEYS */
+    memcpy(encrypt_state_s2c.key, key_s2c, 32);
+    encrypt_state_s2c.seq_num = 0;
+    encrypt_state_s2c.active = 1;
+    printf("[+] Activated outgoing encryption (server→client)\n");
+
+    /* Receive SSH_MSG_NEWKEYS from client (still unencrypted!) */
     newkeys_len = recv_packet(client_fd, recv_newkeys, sizeof(recv_newkeys));
     if (newkeys_len <= 0) {
         fprintf(stderr, "[-] Failed to receive NEWKEYS\n");
@@ -1245,32 +1256,77 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     printf("[+] Received SSH_MSG_NEWKEYS\n");
 
-    /* ======================
-     * Phase 1.9: Activate Encryption
-     * ====================== */
-
-    /* Initialize encryption state for both directions */
-
-    /* Client to server (incoming) */
+    /* Activate encryption for INCOMING packets immediately after receiving NEWKEYS */
     memcpy(encrypt_state_c2s.key, key_c2s, 32);
     encrypt_state_c2s.seq_num = 0;
     encrypt_state_c2s.active = 1;
+    printf("[+] Activated incoming encryption (client→server)\n");
 
-    /* Server to client (outgoing) */
-    memcpy(encrypt_state_s2c.key, key_s2c, 32);
-    encrypt_state_s2c.seq_num = 0;
-    encrypt_state_s2c.active = 1;
-
-    printf("[+] Encryption activated (ChaCha20-Poly1305)\n");
+    printf("[+] Encryption fully activated (ChaCha20-Poly1305)\n");
     printf("    Send sequence: %u\n", encrypt_state_s2c.seq_num);
     printf("    Recv sequence: %u\n", encrypt_state_c2s.seq_num);
     printf("[+] Key exchange complete!\n");
 
+    /* ======================
+     * Phase 1.10: Service Request
+     * ====================== */
+
+    uint8_t service_request[256];
+    ssize_t service_request_len;
+    uint8_t service_accept[256];
+    size_t service_accept_len;
+    char service_name[64];
+    uint32_t service_name_len;
+
+    /* Receive SSH_MSG_SERVICE_REQUEST */
+    service_request_len = recv_packet(client_fd, service_request, sizeof(service_request));
+    if (service_request_len <= 0) {
+        fprintf(stderr, "[-] Failed to receive SERVICE_REQUEST\n");
+        close(client_fd);
+        return;
+    }
+
+    if (service_request[0] != SSH_MSG_SERVICE_REQUEST) {
+        fprintf(stderr, "[-] Expected SERVICE_REQUEST (5), got %d\n", service_request[0]);
+        close(client_fd);
+        return;
+    }
+
+    /* Parse service name */
+    if (read_string(service_request + 1, service_request_len - 1,
+                    service_name, sizeof(service_name), &service_name_len) == 0) {
+        fprintf(stderr, "[-] Failed to parse service name\n");
+        close(client_fd);
+        return;
+    }
+
+    service_name[service_name_len] = '\0';
+    printf("[+] Received SSH_MSG_SERVICE_REQUEST: %s\n", service_name);
+
+    /* Verify service name is "ssh-userauth" */
+    if (strcmp(service_name, "ssh-userauth") != 0) {
+        fprintf(stderr, "[-] Unsupported service: %s\n", service_name);
+        close(client_fd);
+        return;
+    }
+
+    /* Build SSH_MSG_SERVICE_ACCEPT */
+    service_accept_len = 0;
+    service_accept[service_accept_len++] = SSH_MSG_SERVICE_ACCEPT;
+    service_accept_len += write_string(service_accept + service_accept_len,
+                                       "ssh-userauth", 12);
+
+    /* Send SSH_MSG_SERVICE_ACCEPT */
+    if (send_packet(client_fd, service_accept, service_accept_len) < 0) {
+        fprintf(stderr, "[-] Failed to send SERVICE_ACCEPT\n");
+        close(client_fd);
+        return;
+    }
+    printf("[+] Sent SSH_MSG_SERVICE_ACCEPT\n");
+
     /* TODO: Implement remaining SSH protocol
      *
      * Phase 1 tasks (see TODO.md):
-     * 1.9: Encrypted Packets - ChaCha20-Poly1305
-     * 1.10: Service Request - ssh-userauth
      * 1.11: Authentication - Password auth
      * 1.12: Channel Open - Session channel
      * 1.13: Channel Requests - PTY, shell
