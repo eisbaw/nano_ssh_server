@@ -150,6 +150,42 @@ status:
     @echo "  3. just connect           (in another terminal)"
     @echo ""
 
+# Test musl-gcc with simple program
+test-musl:
+    @echo "Testing musl-gcc compilation..."
+    @musl-gcc -static -Os test_musl.c -o test_musl
+    @echo "✅ Musl binary built"
+    @echo ""
+    @echo "Binary info:"
+    @file test_musl
+    @echo ""
+    @echo "Dependencies:"
+    @ldd test_musl 2>&1 || echo "(none - statically linked)"
+    @echo ""
+    @echo "Running test:"
+    @./test_musl
+    @echo ""
+    @echo "Size comparison with glibc:"
+    @gcc -static -Os test_musl.c -o test_glibc 2>/dev/null || true
+    @ls -lh test_musl test_glibc 2>/dev/null | awk '{print $$9 " : " $$5}' || true
+    @rm -f test_glibc
+    @echo ""
+    @echo "✅ musl-gcc works! See MUSL_TEST_RESULTS.md for details."
+
+# Build with musl libc (native, no Docker)
+build-musl:
+    @echo "Building full SSH server with musl libc..."
+    @echo "⚠️  Note: This requires building OpenSSL and libsodium from source"
+    @echo "    For a quick test, run: just test-musl"
+    @echo ""
+    @./build-musl-native.sh
+
+# Clean musl build artifacts
+clean-musl:
+    @echo "Cleaning musl build..."
+    @rm -rf build-musl test_musl test_glibc
+    @echo "Cleaned musl build artifacts"
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
@@ -160,6 +196,10 @@ help:
     @echo "  just connect              # Connect with SSH client"
     @echo "  just test v0-vanilla      # Run tests"
     @echo "  just size-report          # Compare binary sizes"
+    @echo ""
+    @echo "Musl builds:"
+    @echo "  just build-musl           # Build with musl (native, no Docker)"
+    @echo "  just clean-musl           # Clean musl build artifacts"
     @echo ""
     @echo "Development:"
     @echo "  just debug v0-vanilla     # Run in debugger"

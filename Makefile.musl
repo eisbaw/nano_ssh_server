@@ -1,0 +1,55 @@
+# Makefile for building with musl libc
+# Usage: Use with shell-musl.nix environment
+#   nix-shell shell-musl.nix
+#   make -f Makefile.musl
+
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
+         -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector \
+         -fmerge-all-constants -fno-ident -finline-small-functions \
+         -fshort-enums -fomit-frame-pointer -ffast-math -fno-math-errno \
+         -fvisibility=hidden -Wno-unused-result -fno-builtin -fno-plt \
+         -D_POSIX_C_SOURCE=200809L
+
+# For musl static linking
+LDFLAGS = -static -lsodium -lcrypto \
+          -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
+          -Wl,--hash-style=gnu -Wl,--build-id=none \
+          -Wl,-z,norelro -Wl,--no-eh-frame-hdr
+
+VERSION = v12-static
+SRCDIR = $(VERSION)
+TARGET = nano_ssh_server.musl
+
+.PHONY: all clean verify
+
+all: $(TARGET) verify
+
+$(TARGET): $(SRCDIR)/main.c
+	@echo "Building with musl libc..."
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	@echo ""
+	@echo "=== Build Complete ==="
+	@ls -lh $(TARGET)
+	@stat -c "Size: %s bytes" $(TARGET) 2>/dev/null || stat -f "Size: %z bytes" $(TARGET)
+	@echo ""
+
+verify: $(TARGET)
+	@echo "=== Verification ==="
+	@echo -n "File type: "
+	@file $(TARGET)
+	@echo -n "Dynamic deps: "
+	@ldd $(TARGET) 2>&1 || echo "(none - statically linked)"
+	@echo ""
+	@echo "=== Section Analysis ==="
+	@size $(TARGET)
+	@echo ""
+	@echo "✅ Musl static binary built successfully!"
+	@echo ""
+	@echo "Compare with glibc version:"
+	@echo "  ls -lh $(SRCDIR)/nano_ssh_server $(TARGET)"
+	@echo ""
+
+clean:
+	rm -f $(TARGET)
+	@echo "Cleaned musl build"

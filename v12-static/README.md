@@ -2,9 +2,13 @@
 
 ## Overview
 
-This is the **statically linked** version of the Nano SSH Server. All dependencies (libsodium, libcrypto, glibc) are compiled directly into the binary, making it completely self-contained with **zero external dependencies**.
+This is the **statically linked** version of the Nano SSH Server. All dependencies (libsodium, libcrypto, libc) are compiled directly into the binary, making it completely self-contained with **zero external dependencies**.
 
-**Libc:** Currently uses **glibc**. See [LIBC_COMPARISON.md](LIBC_COMPARISON.md) and [MUSL_ANALYSIS.md](MUSL_ANALYSIS.md) for analysis of musl/diet alternatives.
+**Libc Options:**
+- **glibc** (default) - Larger but more compatible
+- **musl** (recommended) - Smaller, truly static - See [MUSL_BUILD_GUIDE.md](MUSL_BUILD_GUIDE.md)
+
+See [LIBC_COMPARISON.md](LIBC_COMPARISON.md) and [BUILD_ATTEMPTS.md](BUILD_ATTEMPTS.md) for detailed analysis.
 
 ## Quick Stats
 
@@ -15,7 +19,9 @@ This is the **statically linked** version of the Nano SSH Server. All dependenci
 | **Dependencies** | **None** | ✅ Fully static |
 | **Portability** | ✅ Excellent | Works anywhere |
 
-## Build
+## Build Options
+
+### Option 1: Quick Build with glibc (Larger)
 
 ```bash
 # Install dependencies (static libraries)
@@ -25,6 +31,16 @@ apt-get install libsodium-dev libssl-dev upx-ucl
 make clean
 make
 ```
+
+### Option 2: Optimal Build with musl (Smaller, Recommended)
+
+```bash
+# Uses Docker/Podman with Alpine Linux (musl-based)
+./docker-build.sh
+# Output: nano_ssh_server.musl (~700-800KB vs 5.2MB glibc)
+```
+
+See [MUSL_BUILD_GUIDE.md](MUSL_BUILD_GUIDE.md) for complete musl build documentation.
 
 ## Output Files
 
@@ -90,7 +106,11 @@ ENTRYPOINT ["/nano_ssh_server"]
 
 ## Documentation
 
-See [SIZE_COMPARISON.md](SIZE_COMPARISON.md) for detailed analysis.
+- **[MUSL_BUILD_GUIDE.md](MUSL_BUILD_GUIDE.md)** - Build with musl libc for smaller binaries
+- **[BUILD_ATTEMPTS.md](BUILD_ATTEMPTS.md)** - Session log of build attempts
+- **[SIZE_COMPARISON.md](SIZE_COMPARISON.md)** - Detailed size analysis
+- **[LIBC_COMPARISON.md](LIBC_COMPARISON.md)** - glibc vs musl comparison
+- **[docker-build.sh](docker-build.sh)** - Simple script for musl builds
 
 ## Testing
 
