@@ -266,9 +266,6 @@ int aes_ctr_hmac_encrypt(uint8_t *packet, size_t packet_len,
      * The CTR counter automatically increments */
     aes128_ctr_xor(&state->ctx, packet, packet_len);
 
-    /* Increment sequence number */
-    state->seq_num++;
-
     return 0;
 }
 
