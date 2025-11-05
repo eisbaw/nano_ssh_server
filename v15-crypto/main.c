@@ -1,10 +1,13 @@
 /*
- * Nano SSH Server - v14-crypto
- * Self-contained crypto: No external crypto libraries for symmetric crypto
- * - Custom AES-128-CTR implementation (no OpenSSL)
+ * Nano SSH Server - v15-crypto
+ * FULLY SELF-CONTAINED: No external crypto libraries!
+ * - Custom AES-128-CTR implementation
  * - Custom SHA-256 implementation
  * - Custom HMAC-SHA256 implementation
- * - Still using libsodium for: Curve25519, Ed25519, randombytes
+ * - Custom DH Group14 implementation
+ * - Custom RSA-2048 implementation
+ * - Custom CSPRNG (/dev/urandom)
+ * - ZERO external crypto dependencies!
  */
 
 #include <stdlib.h>
@@ -14,7 +17,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sodium.h>
+#include "csprng.h"
+#include "bignum.h"
+#include "diffie_hellman.h"
+#include "rsa.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
 
@@ -82,8 +88,8 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 #define SSH_DISCONNECT_ILLEGAL_USER_NAME              15
 
 /* Algorithm names for KEXINIT */
-#define KEX_ALGORITHM           "curve25519-sha256"
-#define HOST_KEY_ALGORITHM      "ssh-ed25519"
+#define KEX_ALGORITHM           "diffie-hellman-group14-sha256"
+#define HOST_KEY_ALGORITHM      "ssh-rsa"
 #define ENCRYPTION_ALGORITHM    "aes128-ctr"      /* AES-128 in CTR mode */
 #define MAC_ALGORITHM           "hmac-sha2-256"   /* HMAC-SHA256 for packet authentication */
 #define COMPRESSION_ALGORITHM   "none"
@@ -114,28 +120,25 @@ typedef struct {
 static crypto_state_t encrypt_state_c2s = {0}, encrypt_state_s2c = {0};
 
 /*
- * Generate random bytes (libsodium provides this)
- * Already using: randombytes_buf() in send_packet()
+ * Generate random bytes (custom CSPRNG using /dev/urandom)
+ * Already using: random_bytes() in send_packet()
  */
 
 /*
- * Curve25519 key generation
+ * Diffie-Hellman Group14 key generation (2048-bit)
  *
- * libsodium provides:
- * - crypto_scalarmult_base(public, private) - generate public from private
- * - crypto_scalarmult(shared, private, peer_public) - compute shared secret
+ * Custom DH implementation:
+ * - dh_generate_keypair(private, public) - generate 2048-bit keypair
+ * - dh_compute_shared(shared, private, peer_public) - compute shared secret
  */
-void generate_curve25519_keypair(uint8_t *private_key, uint8_t *public_key) {
-    /* Generate random private key */
-    randombytes_buf(private_key, 32);
-
-    /* Compute public key */
-    crypto_scalarmult_base(public_key, private_key);
+void generate_dh_keypair(uint8_t *private_key, uint8_t *public_key) {
+    /* Generate 2048-bit DH keypair */
+    dh_generate_keypair(private_key, public_key);
 }
 
-int compute_curve25519_shared(uint8_t *shared, const uint8_t *private_key, const uint8_t *peer_public) {
-    /* Returns 0 on success, -1 on error (e.g., weak public key) */
-    return crypto_scalarmult(shared, private_key, peer_public);
+int compute_dh_shared(uint8_t *shared, const uint8_t *private_key, const uint8_t *peer_public) {
+    /* Returns 0 on success, -1 on error (e.g., invalid public key) */
+    return dh_compute_shared(shared, private_key, peer_public);
 }
 
 /*
@@ -306,7 +309,7 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     memcpy(packet + 5, payload, payload_len);
 
     /* Add random padding */
-    randombytes_buf(packet + 5 + payload_len, padding_len);
+    random_bytes(packet + 5 + payload_len, padding_len);
 
     /* Total length of packet (packet_length || padding_length || payload || padding) */
     total_len = 4 + packet_len;
@@ -598,7 +601,7 @@ size_t build_kexinit(uint8_t *payload) {
     payload[offset++] = SSH_MSG_KEXINIT;
 
     /* Cookie: 16 random bytes */
-    randombytes_buf(payload + offset, 16);
+    random_bytes(payload + offset, 16);
     offset += 16;
 
     /* kex_algorithms */
@@ -900,7 +903,8 @@ ssize_t recv_data(int fd, void *buf, size_t len) {
  * Handle SSH connection
  */
 void handle_client(int client_fd, struct sockaddr_in *client_addr,
-                   const uint8_t *host_public_key, const uint8_t *host_private_key) {
+                   const uint8_t *host_public_key_blob, size_t host_public_key_len,
+                   const rsa_key_t *host_rsa_key) {
     char client_version[256];
     char server_version_line[256];
     ssize_t n;
@@ -1009,30 +1013,28 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
      * Phase 1.6: Curve25519 Key Exchange
      * ====================== */
 
-    uint8_t server_ephemeral_private[32];
-    uint8_t server_ephemeral_public[32];
-    uint8_t client_ephemeral_public[32];
-    uint8_t shared_secret[32];
+    uint8_t server_ephemeral_private[256];  /* DH Group14: 2048-bit */
+    uint8_t server_ephemeral_public[256];   /* DH Group14: 2048-bit */
+    uint8_t client_ephemeral_public[256];   /* DH Group14: 2048-bit */
+    uint8_t shared_secret[256];             /* DH Group14: 2048-bit */
     uint8_t exchange_hash[32];
     uint8_t session_id[32];
-    uint8_t host_key_blob[256];
+    uint8_t host_key_blob[600];  /* Larger for RSA public key blob */
     size_t host_key_blob_len;
-    uint8_t signature[64];
-    unsigned long long sig_len;
+    uint8_t signature[256];      /* RSA-2048 signature size */
+    size_t sig_len;
     uint8_t kex_reply[4096];
     size_t kex_reply_len;
-    uint8_t kex_init_msg[128];
+    uint8_t kex_init_msg[512];  /* Larger for DH Group14 keys */
     ssize_t kex_init_len;
     uint32_t client_eph_str_len;
 
     /* Generate server ephemeral key pair */
-    generate_curve25519_keypair(server_ephemeral_private, server_ephemeral_public);
+    generate_dh_keypair(server_ephemeral_private, server_ephemeral_public);
     
-    /* Build server host key blob (ssh-ed25519 format) */
-    host_key_blob_len = 0;
-    host_key_blob_len += write_string(host_key_blob + host_key_blob_len, "ssh-ed25519", 11);
-    host_key_blob_len += write_string(host_key_blob + host_key_blob_len,
-                                      (const char *)host_public_key, 32);
+    /* Use pre-built server host key blob (ssh-rsa format) */
+    memcpy(host_key_blob, host_public_key_blob, host_public_key_len);
+    host_key_blob_len = host_public_key_len;
     
     /* Receive SSH_MSG_KEX_ECDH_INIT from client */
     kex_init_len = recv_packet(client_fd, kex_init_msg, sizeof(kex_init_msg));
@@ -1050,19 +1052,19 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* Extract client ephemeral public key (Q_C) */
     if (read_string(kex_init_msg + 1, kex_init_len - 1,
-                   (char *)client_ephemeral_public, 33, &client_eph_str_len) == 0) {
+                   (char *)client_ephemeral_public, 257, &client_eph_str_len) == 0) {
         close(client_fd);
         return;
     }
 
-    if (client_eph_str_len != 32) {
+    if (client_eph_str_len != 256) {  /* DH Group14: 2048-bit key */
         close(client_fd);
         return;
     }
     
     /* Compute shared secret K */
-    if (compute_curve25519_shared(shared_secret, server_ephemeral_private,
-                                  client_ephemeral_public) != 0) {
+    if (compute_dh_shared(shared_secret, server_ephemeral_private,
+                         client_ephemeral_public) != 0) {
         close(client_fd);
         return;
     }
@@ -1073,15 +1075,19 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
                          client_kexinit, client_kexinit_len_s,
                          server_kexinit, server_kexinit_len,
                          host_key_blob, host_key_blob_len,
-                         client_ephemeral_public, 32,
-                         server_ephemeral_public, 32,
-                         shared_secret, 32);
+                         client_ephemeral_public, 256,
+                         server_ephemeral_public, 256,
+                         shared_secret, 256);
     
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
     
     /* Sign exchange hash with host private key */
-    crypto_sign_detached(signature, &sig_len, exchange_hash, 32, host_private_key);
+    if (rsa_sign(signature, exchange_hash, host_rsa_key) != 0) {
+        close(client_fd);
+        return;
+    }
+    sig_len = 256;  /* RSA-2048 signature is always 256 bytes */
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     kex_reply_len = 0;
@@ -1093,14 +1099,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* Q_S - server ephemeral public key */
     kex_reply_len += write_string(kex_reply + kex_reply_len,
-                                  (const char *)server_ephemeral_public, 32);
+                                  (const char *)server_ephemeral_public, 256);
 
-    /* Signature of H (ssh-ed25519 signature format) */
+    /* Signature of H (ssh-rsa signature format) */
     {
-        uint8_t sig_blob[128];
+        uint8_t sig_blob[300];
         size_t sig_blob_len = 0;
-        sig_blob_len += write_string(sig_blob, "ssh-ed25519", 11);
-        sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 64);
+        sig_blob_len += write_string(sig_blob, "ssh-rsa", 7);
+        sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 256);
         kex_reply_len += write_string(kex_reply + kex_reply_len,
                                       (const char *)sig_blob, sig_blob_len);
     }
@@ -1746,20 +1752,18 @@ int main(int argc, char *argv[]) {
     int listen_fd;
     int client_fd;
     struct sockaddr_in client_addr;
-    uint8_t host_public_key[32];
-    uint8_t host_private_key[64];
+    static rsa_key_t host_rsa_key;  /* RSA-2048 host key */
+    uint8_t host_public_key_blob[512];  /* SSH public key format */
+    size_t host_public_key_len;
 
     (void)argc;
     (void)argv;
 
-                            
-    /* Initialize libsodium */
-    if (sodium_init() < 0) {
-        return 1;
-    }
-    
-    /* Generate Ed25519 host key pair */
-    crypto_sign_keypair(host_public_key, host_private_key);
+    /* Initialize RSA-2048 host key (hardcoded test key) */
+    rsa_init_key(&host_rsa_key);
+
+    /* Export public key in SSH format */
+    rsa_export_public_key_ssh(host_public_key_blob, &host_public_key_len, &host_rsa_key);
     
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);
@@ -1777,7 +1781,7 @@ int main(int argc, char *argv[]) {
         }
 
         /* Handle client connection */
-        handle_client(client_fd, &client_addr, host_public_key, host_private_key);
+        handle_client(client_fd, &client_addr, host_public_key_blob, host_public_key_len, &host_rsa_key);
 
         /* For now, only handle one connection then exit */
         /* TODO: In production, this should loop forever or handle multiple clients */

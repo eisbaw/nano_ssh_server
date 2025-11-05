@@ -1,8 +1,7 @@
-# Makefile for v14-crypto
-# Self-contained crypto implementation
-# Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256
-# Still using libsodium for: Curve25519, Ed25519, randombytes
-# NO OpenSSL dependency!
+# Makefile for v15-crypto
+# Fully self-contained crypto implementation
+# Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256, DH Group14, RSA-2048, CSPRNG
+# NO external crypto library dependencies (no OpenSSL, no libsodium)!
 
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
@@ -11,7 +10,7 @@ CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
          -fshort-enums -fomit-frame-pointer -ffast-math -fno-math-errno \
          -fvisibility=hidden -Wno-unused-result -fno-builtin -fno-plt \
          -D_POSIX_C_SOURCE=200809L
-LDFLAGS = -lsodium -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
+LDFLAGS = -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr
 
 SRCS = main.c
@@ -38,4 +37,4 @@ compress: $(TARGET)
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(TARGET_COMPRESSED)
-	@echo "Cleaned v14-crypto"
+	@echo "Cleaned v15-crypto"
