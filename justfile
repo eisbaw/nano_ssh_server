@@ -150,6 +150,17 @@ status:
     @echo "  3. just connect           (in another terminal)"
     @echo ""
 
+# Build with musl libc (native, no Docker)
+build-musl:
+    @echo "Building with musl libc..."
+    @./build-musl-native.sh
+
+# Clean musl build artifacts
+clean-musl:
+    @echo "Cleaning musl build..."
+    @rm -rf build-musl
+    @echo "Cleaned musl build artifacts"
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
@@ -160,6 +171,10 @@ help:
     @echo "  just connect              # Connect with SSH client"
     @echo "  just test v0-vanilla      # Run tests"
     @echo "  just size-report          # Compare binary sizes"
+    @echo ""
+    @echo "Musl builds:"
+    @echo "  just build-musl           # Build with musl (native, no Docker)"
+    @echo "  just clean-musl           # Clean musl build artifacts"
     @echo ""
     @echo "Development:"
     @echo "  just debug v0-vanilla     # Run in debugger"
