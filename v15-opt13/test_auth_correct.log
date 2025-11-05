@@ -1,0 +1,120 @@
+[-] Unsupported auth method: none
+[-] Expected CHANNEL_CLOSE (97), got 96
+=================================
+Nano SSH Server v0-vanilla
+=================================
+Port: 2222
+Version: SSH-2.0-NanoSSH_0.1
+Credentials: user / password123
+=================================
+
+[+] Libsodium initialized
+[+] Generated Ed25519 host key pair
+[+] Server socket created and listening on port 2222
+[+] Waiting for connections...
+
+
+[+] Client connected: 127.0.0.1:39028
+[+] Sent version: SSH-2.0-NanoSSH_0.1
+[+] Received version: SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.14
+[+] Version exchange complete
+[+] Built KEXINIT payload (144 bytes)
+[+] Sent KEXINIT
+[+] Received client KEXINIT (1524 bytes)
+[+] KEXINIT exchange complete
+[+] Generated ephemeral key pair
+[+] Built host key blob (51 bytes)
+[+] Received client ephemeral public key (32 bytes)
+[+] Computed shared secret
+[+] Computed exchange hash H
+[+] Set session_id
+[+] Signed exchange hash (signature: 64 bytes)
+[+] Sent KEX_ECDH_REPLY (179 bytes)
+[+] Derived encryption keys:
+    IV c2s: 16 bytes (AES-128-CTR)
+    IV s2c: 16 bytes (AES-128-CTR)
+    Key c2s: 16 bytes (AES-128)
+    Key s2c: 16 bytes (AES-128)
+    MAC c2s: 32 bytes (HMAC-SHA256)
+    MAC s2c: 32 bytes (HMAC-SHA256)
+[+] Sent SSH_MSG_NEWKEYS
+[+] Activated outgoing encryption (server→client)
+[+] Received SSH_MSG_NEWKEYS
+[+] Activated incoming encryption (client→server)
+[+] Encryption fully activated (AES-128-CTR + HMAC-SHA256)
+    Send sequence: 3
+    Recv sequence: 3
+[+] Key exchange complete!
+[DEBUG] Seq=3
+  Encrypted (16 bytes): 12a8f09b77fa9e6961c11ebaf035f7aa
+  Decrypted: 0000001c0a050000000c7373682d7573
+  packet_len=28
+
+[+] Received SSH_MSG_SERVICE_REQUEST: ssh-userauth
+[+] Sent SSH_MSG_SERVICE_ACCEPT
+[DEBUG] Seq=4
+  Encrypted (16 bytes): ab39a89016b7efc1eb8adcb508059c58
+  Decrypted: 0000002c083200000004757365720000
+  packet_len=44
+
+[+] Received USERAUTH_REQUEST:
+    Username: user
+    Service: ssh-connection
+    Method: none
+[+] Sent SSH_MSG_USERAUTH_FAILURE (unsupported method)
+[DEBUG] Seq=5
+  Encrypted (16 bytes): 4e7cd8164f9a0c55ddf96a79c59dfc00
+  Decrypted: 0000007c443200000004757365720000
+  packet_len=124
+
+[+] Received USERAUTH_REQUEST:
+    Username: user
+    Service: ssh-connection
+    Method: password
+    Password: password123
+    Change password: no
+[+] Authentication successful
+[+] Sent SSH_MSG_USERAUTH_SUCCESS
+[+] Authentication complete
+[DEBUG] Seq=6
+  Encrypted (16 bytes): 926f7ef80a493cbd7571bb8459037452
+  Decrypted: 0000002c135a0000000773657373696f
+  packet_len=44
+
+[+] Received SSH_MSG_CHANNEL_OPEN:
+    Channel type: session
+    Client channel ID: 0
+    Client window size: 2097152
+    Client max packet: 32768
+[+] Sent SSH_MSG_CHANNEL_OPEN_CONFIRMATION:
+    Server channel ID: 0
+    Server window size: 32768
+    Server max packet: 16384
+[+] Channel opened successfully
+[DEBUG] Seq=7
+  Encrypted (16 bytes): 5f70b365167e6263e451b782df4c9e1f
+  Decrypted: 0000001c0c6200000000000000057368
+  packet_len=28
+
+[+] Received SSH_MSG_CHANNEL_REQUEST:
+    Recipient channel: 0
+    Request type: shell
+    Want reply: yes
+[+] Handling shell request: accepting
+[+] Sent SSH_MSG_CHANNEL_SUCCESS
+[+] Channel requests complete, shell_ready=1
+[+] Sent SSH_MSG_CHANNEL_DATA: "Hello World
+" (13 bytes)
+[+] Client window size remaining: 2097139 bytes
+[+] Closing channel...
+[+] Sent SSH_MSG_CHANNEL_EOF
+[+] Sent SSH_MSG_CHANNEL_CLOSE
+[DEBUG] Seq=8
+  Encrypted (16 bytes): a521d6e3ef5b33e57bcab037a5767b52
+  Decrypted: 0000000c0660000000004c9305bd5b53
+  packet_len=12
+
+[+] Closing TCP connection
+[+] Connection closed successfully
+
+[+] Server shutting down
