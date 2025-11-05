@@ -3,6 +3,8 @@
 *.so
 *.a
 nano_ssh_server
+nano_ssh_server.upx
+*.upx
 test_crypto
 test_musl
 test_glibc
