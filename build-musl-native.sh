@@ -10,6 +10,7 @@ INSTALL_DIR="$BUILD_DIR/install"
 
 # Versions
 LIBSODIUM_VERSION="1.0.19"
+LIBSODIUM_DIR="libsodium-stable"  # Tarball extracts to this name
 OPENSSL_VERSION="3.0.13"
 
 # Colors for output
@@ -48,12 +49,12 @@ if [ ! -f "$INSTALL_DIR/lib/libsodium.a" ]; then
             curl -L -O "https://download.libsodium.org/libsodium/releases/libsodium-$LIBSODIUM_VERSION.tar.gz"
     fi
 
-    if [ ! -d "libsodium-$LIBSODIUM_VERSION" ]; then
+    if [ ! -d "$LIBSODIUM_DIR" ]; then
         info "Extracting libsodium..."
         tar xzf "libsodium-$LIBSODIUM_VERSION.tar.gz"
     fi
 
-    cd "libsodium-$LIBSODIUM_VERSION"
+    cd "$LIBSODIUM_DIR"
 
     info "Configuring libsodium with musl-gcc..."
     CC=musl-gcc ./configure \
@@ -100,7 +101,6 @@ if [ ! -f "$INSTALL_DIR/lib/libcrypto.a" ]; then
         no-shared \
         no-tests \
         no-ui-console \
-        no-docs \
         -static \
         -Os
 

@@ -150,15 +150,40 @@ status:
     @echo "  3. just connect           (in another terminal)"
     @echo ""
 
+# Test musl-gcc with simple program
+test-musl:
+    @echo "Testing musl-gcc compilation..."
+    @musl-gcc -static -Os test_musl.c -o test_musl
+    @echo "✅ Musl binary built"
+    @echo ""
+    @echo "Binary info:"
+    @file test_musl
+    @echo ""
+    @echo "Dependencies:"
+    @ldd test_musl 2>&1 || echo "(none - statically linked)"
+    @echo ""
+    @echo "Running test:"
+    @./test_musl
+    @echo ""
+    @echo "Size comparison with glibc:"
+    @gcc -static -Os test_musl.c -o test_glibc 2>/dev/null || true
+    @ls -lh test_musl test_glibc 2>/dev/null | awk '{print $$9 " : " $$5}' || true
+    @rm -f test_glibc
+    @echo ""
+    @echo "✅ musl-gcc works! See MUSL_TEST_RESULTS.md for details."
+
 # Build with musl libc (native, no Docker)
 build-musl:
-    @echo "Building with musl libc..."
+    @echo "Building full SSH server with musl libc..."
+    @echo "⚠️  Note: This requires building OpenSSL and libsodium from source"
+    @echo "    For a quick test, run: just test-musl"
+    @echo ""
     @./build-musl-native.sh
 
 # Clean musl build artifacts
 clean-musl:
     @echo "Cleaning musl build..."
-    @rm -rf build-musl
+    @rm -rf build-musl test_musl test_glibc
     @echo "Cleaned musl build artifacts"
 
 # Show help
