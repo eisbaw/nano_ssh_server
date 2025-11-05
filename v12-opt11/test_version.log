@@ -1,0 +1,22 @@
+[-] Invalid SSH version: 
+[-] Expected: SSH-2.0-*
+=================================
+Nano SSH Server v0-vanilla
+=================================
+Port: 2222
+Version: SSH-2.0-NanoSSH_0.1
+Credentials: user / password123
+=================================
+
+[+] Libsodium initialized
+[+] Generated Ed25519 host key pair
+[+] Server socket created and listening on port 2222
+[+] Waiting for connections...
+
+
+[+] Client connected: 127.0.0.1:39876
+[+] Sent version: SSH-2.0-NanoSSH_0.1
+[+] Received version: 
+[+] Sent SSH_MSG_DISCONNECT: Only SSH-2.0 is supported (code 8)
+
+[+] Server shutting down
