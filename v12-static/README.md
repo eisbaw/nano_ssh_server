@@ -4,6 +4,8 @@
 
 This is the **statically linked** version of the Nano SSH Server. All dependencies (libsodium, libcrypto, glibc) are compiled directly into the binary, making it completely self-contained with **zero external dependencies**.
 
+**Libc:** Currently uses **glibc**. See [LIBC_COMPARISON.md](LIBC_COMPARISON.md) and [MUSL_ANALYSIS.md](MUSL_ANALYSIS.md) for analysis of musl/diet alternatives.
+
 ## Quick Stats
 
 | Metric | Value | vs v11-opt10 |

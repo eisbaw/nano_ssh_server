@@ -1,0 +1,66 @@
+# Alpine-based build for v12-static with musl
+# This gives us a truly minimal static binary without glibc bloat
+
+FROM alpine:3.19 AS builder
+
+# Install build tools and libraries
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    make \
+    libsodium-dev \
+    libsodium-static \
+    openssl-dev \
+    openssl-libs-static \
+    linux-headers
+
+# Copy source code
+WORKDIR /build
+COPY main.c .
+
+# Build with musl (statically linked, optimized)
+RUN gcc -o nano_ssh_server main.c \
+    -static \
+    -std=c11 \
+    -Os \
+    -flto \
+    -ffunction-sections \
+    -fdata-sections \
+    -fno-unwind-tables \
+    -fno-asynchronous-unwind-tables \
+    -fno-stack-protector \
+    -fmerge-all-constants \
+    -fno-ident \
+    -finline-small-functions \
+    -fshort-enums \
+    -fomit-frame-pointer \
+    -ffast-math \
+    -fno-math-errno \
+    -fvisibility=hidden \
+    -fno-builtin \
+    -fno-plt \
+    -lsodium \
+    -lcrypto \
+    -Wl,--gc-sections \
+    -Wl,--strip-all \
+    -Wl,--as-needed \
+    -Wl,--hash-style=gnu \
+    -Wl,--build-id=none \
+    -Wl,-z,norelro \
+    -Wl,--no-eh-frame-hdr
+
+# Strip aggressively
+RUN strip --strip-all --remove-section=.note --remove-section=.comment nano_ssh_server
+
+# Verify it's static
+RUN ldd nano_ssh_server 2>&1 | grep "not a dynamic executable" || exit 1
+
+# Measure size
+RUN ls -lh nano_ssh_server && \
+    size nano_ssh_server
+
+# Minimal runtime image (FROM scratch)
+FROM scratch
+COPY --from=builder /build/nano_ssh_server /nano_ssh_server
+EXPOSE 2222
+ENTRYPOINT ["/nano_ssh_server"]
