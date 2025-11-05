@@ -4,6 +4,8 @@
 *.a
 nano_ssh_server
 test_crypto
+test_musl
+test_glibc
 
 # Editor and IDE files
 *.swp
@@ -23,5 +25,6 @@ host_key.pub
 
 # Test artifacts
 *.pcap
+*.log
 test_output/
 build-musl/
