@@ -97,46 +97,68 @@ static void bn_mul_wide(bn_2x_t *r, const bn_t *a, const bn_t *b) {
     }
 }
 
-/* Simple modular reduction using repeated subtraction */
+/* Modular reduction: process word-by-word from high to low
+ * Similar to long division algorithm
+ */
 static void bn_mod_simple(bn_t *r, const bn_2x_t *a, const bn_t *m) {
     bn_2x_t temp = *a;
 
-    /* Repeatedly subtract m until result < m */
-    for (int iter = 0; iter < 10000; iter++) {
-        /* Check if temp < m (compare high words first) */
+    /* Process from high word down to word BN_WORDS */
+    for (int word_pos = BN_2X_WORDS - 1; word_pos >= BN_WORDS; word_pos--) {
+        /* Skip if this word and all higher words are zero */
         int all_high_zero = 1;
-        for (int i = BN_WORDS; i < BN_2X_WORDS; i++) {
+        for (int i = word_pos; i < BN_2X_WORDS; i++) {
             if (temp.array[i] != 0) {
                 all_high_zero = 0;
                 break;
             }
         }
+        if (all_high_zero) continue;
 
-        if (all_high_zero) {
-            /* Copy low words to result */
+        /* Subtract m * 2^(32 * (word_pos - (BN_WORDS-1))) repeatedly */
+        /* This aligns m's highest word with temp's word at word_pos */
+        int shift_words = word_pos - (BN_WORDS - 1);
+
+        while (1) {
+            /* Check if temp[word_pos..word_pos+63] >= m * 2^(shift_words * 32) */
+            /* First check high words */
+            int can_subtract = 0;
+            for (int i = BN_WORDS - 1; i >= 0; i--) {
+                int temp_idx = i + shift_words;
+                if (temp_idx >= BN_2X_WORDS) continue;
+
+                if (temp.array[temp_idx] > m->array[i]) {
+                    can_subtract = 1;
+                    break;
+                } else if (temp.array[temp_idx] < m->array[i]) {
+                    break;
+                }
+            }
+
+            if (!can_subtract) break;
+
+            /* Subtract m shifted by shift_words */
+            uint32_t borrow = 0;
             for (int i = 0; i < BN_WORDS; i++) {
-                r->array[i] = temp.array[i];
-            }
+                int dest_idx = i + shift_words;
+                if (dest_idx >= BN_2X_WORDS) break;
 
-            /* Keep subtracting m until r < m */
-            while (bn_cmp(r, m) >= 0) {
-                bn_sub(r, r, m);
+                uint64_t diff = (uint64_t)temp.array[dest_idx] - (uint64_t)m->array[i] - (uint64_t)borrow;
+                temp.array[dest_idx] = (uint32_t)(diff & 0xFFFFFFFF);
+                borrow = (diff >> 32) & 1;
             }
-            return;
-        }
-
-        /* temp >= 2^2048, so subtract m * 2^2048 */
-        /* This is equivalent to subtracting m from the high words */
-        uint32_t borrow = 0;
-        for (int i = 0; i < BN_WORDS; i++) {
-            uint64_t diff = (uint64_t)temp.array[BN_WORDS + i] - (uint64_t)m->array[i] - (uint64_t)borrow;
-            temp.array[BN_WORDS + i] = (uint32_t)(diff & 0xFFFFFFFF);
-            borrow = (diff >> 32) & 1;  /* Check if subtraction underflowed */
         }
     }
 
-    /* Should never reach here */
-    bn_zero(r);
+    /* Copy low words to result */
+    for (int i = 0; i < BN_WORDS; i++) {
+        r->array[i] = temp.array[i];
+    }
+
+    /* Final reduction */
+    while (bn_cmp(r, m) >= 0) {
+        bn_sub(r, r, m);
+    }
 }
 
 /* Modular multiplication: r = (a * b) mod m */
