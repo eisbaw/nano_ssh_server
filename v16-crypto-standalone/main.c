@@ -11,6 +11,7 @@
  * - ZERO external dependencies (only libc)!
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -716,12 +717,12 @@ void compute_exchange_hash(uint8_t *hash_out,
     hash_update(&h, buf, 4);
     hash_update(&h, server_host_key_blob, host_key_blob_len);
 
-    /* Q_C - client ephemeral public key */
-    len = write_string(buf, (const char *)client_ephemeral_pub, client_eph_len);
+    /* Q_C - client ephemeral public key (as mpint) */
+    len = write_mpint(buf, client_ephemeral_pub, client_eph_len);
     hash_update(&h, buf, len);
 
-    /* Q_S - server ephemeral public key */
-    len = write_string(buf, (const char *)server_ephemeral_pub, server_eph_len);
+    /* Q_S - server ephemeral public key (as mpint) */
+    len = write_mpint(buf, server_ephemeral_pub, server_eph_len);
     hash_update(&h, buf, len);
 
     /* K - shared secret (as mpint) */
@@ -1038,27 +1039,42 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     host_key_blob_len = host_public_key_len;
     
     /* Receive SSH_MSG_KEX_ECDH_INIT from client */
+    fprintf(stderr, "DEBUG: Waiting for KEX_ECDH_INIT...\n");
     kex_init_len = recv_packet(client_fd, kex_init_msg, sizeof(kex_init_msg));
     if (kex_init_len <= 0) {
+        fprintf(stderr, "ERROR: Failed to receive KEX_ECDH_INIT (len=%zd)\n", kex_init_len);
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: Received packet of %zd bytes, type=%d\n", kex_init_len, kex_init_msg[0]);
 
     if (kex_init_msg[0] != SSH_MSG_KEX_ECDH_INIT) {
+        fprintf(stderr, "ERROR: Expected KEX_ECDH_INIT (%d), got %d\n", SSH_MSG_KEX_ECDH_INIT, kex_init_msg[0]);
         send_disconnect(client_fd, SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
                        "Expected KEX_ECDH_INIT message");
         close(client_fd);
         return;
     }
 
-    /* Extract client ephemeral public key (Q_C) */
+    /* Extract client ephemeral public key (Q_C) - comes as mpint */
+    uint8_t client_eph_raw[257];
     if (read_string(kex_init_msg + 1, kex_init_len - 1,
-                   (char *)client_ephemeral_public, 257, &client_eph_str_len) == 0) {
+                   (char *)client_eph_raw, 257, &client_eph_str_len) == 0) {
         close(client_fd);
         return;
     }
 
-    if (client_eph_str_len != 256) {  /* DH Group14: 2048-bit key */
+    /* Handle mpint format: skip leading 0x00 if present (when high bit is set) */
+    if (client_eph_str_len == 257 && client_eph_raw[0] == 0x00) {
+        memcpy(client_ephemeral_public, client_eph_raw + 1, 256);
+    } else if (client_eph_str_len == 256) {
+        memcpy(client_ephemeral_public, client_eph_raw, 256);
+    } else if (client_eph_str_len < 256) {
+        /* Client sent shorter mpint (with leading zeros stripped) - pad with zeros */
+        memset(client_ephemeral_public, 0, 256);
+        memcpy(client_ephemeral_public + (256 - client_eph_str_len), client_eph_raw, client_eph_str_len);
+    } else {
+        /* Invalid key length */
         close(client_fd);
         return;
     }
@@ -1066,9 +1082,11 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Compute shared secret K */
     if (compute_dh_shared(shared_secret, server_ephemeral_private,
                          client_ephemeral_public) != 0) {
+        fprintf(stderr, "ERROR: DH shared secret computation failed\n");
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: DH shared secret computed successfully\n");
     
     /* Compute exchange hash H */
     compute_exchange_hash(exchange_hash,
@@ -1084,11 +1102,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     memcpy(session_id, exchange_hash, 32);
     
     /* Sign exchange hash with host private key */
+    fprintf(stderr, "DEBUG: Computing RSA signature...\n");
     if (rsa_sign(signature, exchange_hash, host_rsa_key) != 0) {
+        fprintf(stderr, "ERROR: RSA signature failed\n");
         close(client_fd);
         return;
     }
     sig_len = 256;  /* RSA-2048 signature is always 256 bytes */
+    fprintf(stderr, "DEBUG: RSA signature computed successfully\n");
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     kex_reply_len = 0;
@@ -1098,9 +1119,9 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     kex_reply_len += write_string(kex_reply + kex_reply_len,
                                   (const char *)host_key_blob, host_key_blob_len);
 
-    /* Q_S - server ephemeral public key */
-    kex_reply_len += write_string(kex_reply + kex_reply_len,
-                                  (const char *)server_ephemeral_public, 256);
+    /* Q_S - server ephemeral public key (as mpint to handle sign bit) */
+    kex_reply_len += write_mpint(kex_reply + kex_reply_len,
+                                 server_ephemeral_public, 256);
 
     /* Signature of H (ssh-rsa signature format) */
     {
@@ -1113,10 +1134,13 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     /* Send SSH_MSG_KEX_ECDH_REPLY */
+    fprintf(stderr, "DEBUG: Sending KEX_ECDH_REPLY (%zu bytes)...\n", kex_reply_len);
     if (send_packet(client_fd, kex_reply, kex_reply_len) < 0) {
+        fprintf(stderr, "ERROR: Failed to send KEX_ECDH_REPLY\n");
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: KEX_ECDH_REPLY sent successfully\n");
     
     /* ======================
      * Phase 1.7: Key Derivation
