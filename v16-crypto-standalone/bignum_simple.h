@@ -129,9 +129,9 @@ static void bn_mod_simple(bn_t *r, const bn_2x_t *a, const bn_t *m) {
         /* This is equivalent to subtracting m from the high words */
         uint32_t borrow = 0;
         for (int i = 0; i < BN_WORDS; i++) {
-            uint32_t next_borrow = (temp.array[BN_WORDS + i] < m->array[i] + borrow) ? 1 : 0;
-            temp.array[BN_WORDS + i] = temp.array[BN_WORDS + i] - m->array[i] - borrow;
-            borrow = next_borrow;
+            uint64_t diff = (uint64_t)temp.array[BN_WORDS + i] - (uint64_t)m->array[i] - (uint64_t)borrow;
+            temp.array[BN_WORDS + i] = (uint32_t)(diff & 0xFFFFFFFF);
+            borrow = (diff >> 32) & 1;  /* Check if subtraction underflowed */
         }
     }
 
