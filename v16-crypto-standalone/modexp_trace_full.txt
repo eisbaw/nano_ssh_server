@@ -1,0 +1,103 @@
+========================================
+Test: 2^17 mod DH_GROUP14_PRIME
+========================================
+
+Input verification:
+exponent: 00000011 
+Expected: 17 = 0x11 = 0b10001
+This means we should process bits 0 and 4
+
+
+=== Starting bn_modexp ===
+base: 00000002 
+exp: 00000011 
+mod (first 3 words): ffffffff ffffffff c90fdaa2 2168c234 c4c6628b 80dc1cd1 29024e08 8a67cc74 020bbea6 3b139b22 514a0879 8e3404dd ef9519b3 cd3a431b 302b0a6d f25f1437 4fe1356d 6d51c245 e485b576 625e7ec6 f44c42e9 a637ed6b 0bff5cb6 f406b7ed ee386bfb 5a899fa5 ae9f2411 7c4b1fe6 49286651 ece45b3d c2007cb8 a163bf05 98da4836 1c55d39a 69163fa8 fd24cf5f 83655d23 dca3ad96 1c62f356 208552bb 9ed52907 7096966d 670c354e 4abc9804 f1746c08 ca18217c 32905e46 2e36ce3b e39e772c 180e8603 9b2783a2 ec07a28f b5c55df0 6f4c52c9 de2bcbf6 95581718 3995497c ea956ae5 15d22618 98fa0510 15728e5a 8aacaa68 ffffffff ffffffff 
+mod.array[0-2]: ffffffff ffffffff 8aacaa68
+
+Initialized result = 1
+result: 00000001 
+
+After temp_base = base % mod:
+temp_base: 00000002 
+
+--- Processing exp word[0] = 0x00000011 ---
+
+  ** Bit 0 (word[0] bit 0) is SET **
+  Before multiply:
+    result: 00000001 
+    temp_base: 00000002 
+  After bn_mul(&temp, &result, &temp_base):
+    temp: 00000002 
+  After bn_mod(&result, &temp, mod):
+    result: 00000002 
+  Squaring temp_base (iteration 1, bit 0):
+    Before square:
+      temp_base: 00000002 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000004 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000004 
+  Squaring temp_base (iteration 1, bit 1):
+    Before square:
+      temp_base: 00000004 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000010 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000010 
+  Squaring temp_base (iteration 1, bit 2):
+    Before square:
+      temp_base: 00000010 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000100 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000100 
+  Squaring temp_base (iteration 1, bit 3):
+    Before square:
+      temp_base: 00000100 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00010000 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00010000 
+
+  ** Bit 4 (word[0] bit 4) is SET **
+  Before multiply:
+    result: 00000002 
+    temp_base: 00010000 
+  After bn_mul(&temp, &result, &temp_base):
+    temp: 00020000 
+  After bn_mod(&result, &temp, mod):
+    result: 00020000 
+  Squaring temp_base (iteration 2, bit 4):
+    Before square:
+      temp_base: 00010000 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000001 00000000 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000001 00000000 
+  Squaring temp_base (iteration 2, bit 5):
+    Before square:
+      temp_base: 00000001 00000000 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000001 00000000 00000000 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000001 00000000 00000000 
+  Squaring temp_base (iteration 2, bit 6):
+    Before square:
+      temp_base: 00000001 00000000 00000000 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000001 00000000 00000000 00000000 00000000 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000001 00000000 00000000 00000000 00000000 
+  Squaring temp_base (iteration 2, bit 7):
+    Before square:
+      temp_base: 00000001 00000000 00000000 00000000 00000000 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+    After bn_mod(&temp_base, &temp, mod):
+      temp_base: 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+  Squaring temp_base (iteration 2, bit 8):
+    Before square:
+      temp_base: 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+    After bn_mul(&temp, &temp_base, &temp_base):
+      temp: 00000001 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+    After bn_mod(&temp_base, &temp
