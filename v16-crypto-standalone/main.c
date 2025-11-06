@@ -779,7 +779,7 @@ void derive_key(uint8_t *key_out, size_t key_len,
 
     /* K (shared secret) as mpint */
     {
-        uint8_t mpint_buf[64];
+        uint8_t mpint_buf[300];  /* Large enough for 256-byte shared secret + mpint overhead */
         size_t mpint_len = write_mpint(mpint_buf, shared_secret, shared_len);
         hash_update(&h, mpint_buf, mpint_len);
     }
@@ -802,7 +802,7 @@ void derive_key(uint8_t *key_out, size_t key_len,
 
         /* K as mpint */
         {
-            uint8_t mpint_buf[64];
+            uint8_t mpint_buf[300];  /* Large enough for 256-byte shared secret + mpint overhead */
             size_t mpint_len = write_mpint(mpint_buf, shared_secret, shared_len);
             hash_update(&h, mpint_buf, mpint_len);
         }
@@ -1181,11 +1181,12 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         return;
     }
     fprintf(stderr, "DEBUG: KEX_ECDH_REPLY sent successfully\n");
-    
+
     /* ======================
      * Phase 1.7: Key Derivation
      * ====================== */
 
+    fprintf(stderr, "DEBUG: Starting key derivation...\n");
     uint8_t iv_c2s[16];      /* IV client to server (AES-128-CTR) */
     uint8_t iv_s2c[16];      /* IV server to client (AES-128-CTR) */
     uint8_t key_c2s[16];     /* Encryption key client to server (AES-128) */
@@ -1199,12 +1200,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
      * - Encryption key: 16 bytes (AES-128)
      * - MAC key: 32 bytes (HMAC-SHA256)
      */
-    derive_key(iv_c2s, 16, shared_secret, 32, exchange_hash, 'A', session_id);
-    derive_key(iv_s2c, 16, shared_secret, 32, exchange_hash, 'B', session_id);
-    derive_key(key_c2s, 16, shared_secret, 32, exchange_hash, 'C', session_id);
-    derive_key(key_s2c, 16, shared_secret, 32, exchange_hash, 'D', session_id);
-    derive_key(int_key_c2s, 32, shared_secret, 32, exchange_hash, 'E', session_id);
-    derive_key(int_key_s2c, 32, shared_secret, 32, exchange_hash, 'F', session_id);
+    fprintf(stderr, "DEBUG: Deriving keys (A-F)...\n");
+    derive_key(iv_c2s, 16, shared_secret, 256, exchange_hash, 'A', session_id);
+    derive_key(iv_s2c, 16, shared_secret, 256, exchange_hash, 'B', session_id);
+    derive_key(key_c2s, 16, shared_secret, 256, exchange_hash, 'C', session_id);
+    derive_key(key_s2c, 16, shared_secret, 256, exchange_hash, 'D', session_id);
+    derive_key(int_key_c2s, 32, shared_secret, 256, exchange_hash, 'E', session_id);
+    derive_key(int_key_s2c, 32, shared_secret, 256, exchange_hash, 'F', session_id);
+    fprintf(stderr, "DEBUG: Key derivation complete\n");
 
                             
     /* ======================
@@ -1216,11 +1219,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     ssize_t newkeys_len;
 
     /* Send SSH_MSG_NEWKEYS */
+    fprintf(stderr, "DEBUG: Sending SSH_MSG_NEWKEYS...\n");
     newkeys_msg[0] = SSH_MSG_NEWKEYS;
     if (send_packet(client_fd, newkeys_msg, 1) < 0) {
+        fprintf(stderr, "ERROR: Failed to send SSH_MSG_NEWKEYS\n");
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: SSH_MSG_NEWKEYS sent successfully\n");
     
     /* ======================
      * Phase 1.9: Activate Encryption (Server→Client)
