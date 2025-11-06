@@ -693,45 +693,66 @@ void compute_exchange_hash(uint8_t *hash_out,
     uint8_t buf[1024];
     size_t len;
 
+    fprintf(stderr, "\n=== EXCHANGE HASH COMPUTATION ===\n");
     hash_init(&h);
 
     /* V_C - client version string */
     len = write_string(buf, client_version, strlen(client_version));
+    fprintf(stderr, "V_C (client version): '%s' (%zu bytes in string format)\n", client_version, len);
+    trace_hex("V_C encoded", buf, len);
     hash_update(&h, buf, len);
 
     /* V_S - server version string */
     len = write_string(buf, server_version, strlen(server_version));
+    fprintf(stderr, "V_S (server version): '%s' (%zu bytes in string format)\n", server_version, len);
+    trace_hex("V_S encoded", buf, len);
     hash_update(&h, buf, len);
 
     /* I_C - client KEXINIT payload */
     write_uint32_be(buf, client_kexinit_len);
+    fprintf(stderr, "I_C (client KEXINIT): %zu bytes (4-byte length + payload)\n", client_kexinit_len);
+    trace_hex("I_C length prefix", buf, 4);
     hash_update(&h, buf, 4);
     hash_update(&h, client_kexinit, client_kexinit_len);
 
     /* I_S - server KEXINIT payload */
     write_uint32_be(buf, server_kexinit_len);
+    fprintf(stderr, "I_S (server KEXINIT): %zu bytes (4-byte length + payload)\n", server_kexinit_len);
+    trace_hex("I_S length prefix", buf, 4);
     hash_update(&h, buf, 4);
     hash_update(&h, server_kexinit, server_kexinit_len);
 
     /* K_S - server host public key blob */
     write_uint32_be(buf, host_key_blob_len);
+    fprintf(stderr, "K_S (host key blob): %zu bytes (4-byte length + blob)\n", host_key_blob_len);
+    trace_hex("K_S length prefix", buf, 4);
+    trace_hex("K_S blob (first 64 bytes)", server_host_key_blob, host_key_blob_len < 64 ? host_key_blob_len : 64);
     hash_update(&h, buf, 4);
     hash_update(&h, server_host_key_blob, host_key_blob_len);
 
     /* Q_C - client ephemeral public key (as mpint) */
     len = write_mpint(buf, client_ephemeral_pub, client_eph_len);
+    fprintf(stderr, "Q_C (client DH public): %zu bytes as mpint (encoded as %zu bytes)\n", client_eph_len, len);
+    trace_hex("Q_C mpint encoded", buf, len);
     hash_update(&h, buf, len);
 
     /* Q_S - server ephemeral public key (as mpint) */
     len = write_mpint(buf, server_ephemeral_pub, server_eph_len);
+    fprintf(stderr, "Q_S (server DH public): %zu bytes as mpint (encoded as %zu bytes)\n", server_eph_len, len);
+    trace_hex("Q_S mpint encoded", buf, len);
     hash_update(&h, buf, len);
 
     /* K - shared secret (as mpint) */
     len = write_mpint(buf, shared_secret, shared_secret_len);
+    fprintf(stderr, "K (shared secret): %zu bytes as mpint (encoded as %zu bytes)\n", shared_secret_len, len);
+    trace_hex("K mpint encoded", buf, len);
     hash_update(&h, buf, len);
 
     /* Finalize hash */
     hash_final(&h, hash_out);
+    fprintf(stderr, "Final exchange hash H:\n");
+    trace_hex("H (SHA-256)", hash_out, 32);
+    fprintf(stderr, "=================================\n\n");
 }
 
 /*
