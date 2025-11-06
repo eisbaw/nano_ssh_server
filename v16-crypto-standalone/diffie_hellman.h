@@ -8,7 +8,7 @@
 #ifndef DIFFIE_HELLMAN_H
 #define DIFFIE_HELLMAN_H
 
-#include "bignum_tiny.h"
+#include "bignum_simple.h"
 #include "csprng.h"
 
 /* DH Group14 Prime (2048-bit)

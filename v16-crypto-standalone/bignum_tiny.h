@@ -289,20 +289,23 @@ static void mont_init(mont_ctx_t *ctx, const bn_t *m) {
     /* 2^2048 = 1 << 2048 = word[64] = 1 (but that's out of bounds!)
      * So we need to compute 2^2048 mod m properly */
 
-    /* Simple approach: r = 1, then double 2048 times, reducing each time */
+    /* Simple approach: r = 1, then double 4096 times, reducing each time
+     * This computes R^2 mod m where R = 2^2048 */
     bn_t r, two_r;
     bn_zero(&r);
     r.array[0] = 1;
 
-    for (int i = 0; i < 2048 * 2; i++) {  /* 2^4096 = (2^2048)^2 */
-        /* r = (r + r) mod m = 2*r mod m */
+    for (int i = 0; i < 2048 * 2; i++) {  /* 2^4096 = (2^1)^4096 starting from 1 */
+        /* two_r = (r + r) mod m = 2*r mod m */
         uint32_t carry = bn_add(&two_r, &r, &r);
 
+        /* Reduce if needed */
         if (carry || bn_cmp(&two_r, m) >= 0) {
-            bn_sub(&r, &two_r, m);
-        } else {
-            r = two_r;
+            bn_sub(&two_r, &two_r, m);  /* two_r = two_r - m */
         }
+
+        /* Copy result back to r for next iteration */
+        r = two_r;
     }
 
     ctx->r2 = r;
