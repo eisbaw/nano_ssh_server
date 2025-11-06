@@ -25,6 +25,7 @@
 #include "rsa.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
+#include "trace_kex.h"
 
 /* Forward declarations */
 ssize_t send_data(int fd, const void *buf, size_t len);
@@ -1065,19 +1066,29 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     /* Handle mpint format: skip leading 0x00 if present (when high bit is set) */
+    fprintf(stderr, "\n=== CLIENT KEX_ECDH_INIT ===\n");
+    fprintf(stderr, "Raw mpint length: %u bytes\n", client_eph_str_len);
+    trace_mpint("Client public key (Q_C) raw", client_eph_raw, client_eph_str_len);
+
     if (client_eph_str_len == 257 && client_eph_raw[0] == 0x00) {
+        fprintf(stderr, "Mpint format: 257 bytes with leading 0x00 (stripped)\n");
         memcpy(client_ephemeral_public, client_eph_raw + 1, 256);
     } else if (client_eph_str_len == 256) {
+        fprintf(stderr, "Mpint format: 256 bytes (no leading 0x00)\n");
         memcpy(client_ephemeral_public, client_eph_raw, 256);
     } else if (client_eph_str_len < 256) {
+        fprintf(stderr, "Mpint format: %u bytes (zero-padded to 256)\n", client_eph_str_len);
         /* Client sent shorter mpint (with leading zeros stripped) - pad with zeros */
         memset(client_ephemeral_public, 0, 256);
         memcpy(client_ephemeral_public + (256 - client_eph_str_len), client_eph_raw, client_eph_str_len);
     } else {
         /* Invalid key length */
+        fprintf(stderr, "ERROR: Invalid key length: %u\n", client_eph_str_len);
         close(client_fd);
         return;
     }
+    trace_mpint("Client public key (Q_C) normalized", client_ephemeral_public, 256);
+    fprintf(stderr, "===========================\n\n");
     
     /* Compute shared secret K */
     if (compute_dh_shared(shared_secret, server_ephemeral_private,
@@ -1134,6 +1145,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     /* Send SSH_MSG_KEX_ECDH_REPLY */
+    fprintf(stderr, "\n=== KEX_ECDH_REPLY PACKET DETAILS ===\n");
+    fprintf(stderr, "Total packet length: %zu bytes\n", kex_reply_len);
+    fprintf(stderr, "Message type: %d (SSH_MSG_KEX_ECDH_REPLY=%d)\n", kex_reply[0], SSH_MSG_KEX_ECDH_REPLY);
+    trace_hex("KEX_ECDH_REPLY payload", kex_reply, kex_reply_len);
+    trace_mpint("Server public key (Q_S)", server_ephemeral_public, 256);
+    trace_hex("Exchange hash (H)", exchange_hash, 32);
+    fprintf(stderr, "=====================================\n\n");
+
     fprintf(stderr, "DEBUG: Sending KEX_ECDH_REPLY (%zu bytes)...\n", kex_reply_len);
     if (send_packet(client_fd, kex_reply, kex_reply_len) < 0) {
         fprintf(stderr, "ERROR: Failed to send KEX_ECDH_REPLY\n");
