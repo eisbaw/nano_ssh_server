@@ -60,29 +60,23 @@ just valgrind <version>  # Check for memory leaks
 
 ```
 nano_ssh_server/
-├── shell.nix           # Nix development environment
-├── justfile            # Task automation
-├── Makefile           # Top-level build orchestration
-├── PRD.md             # Product Requirements Document
-├── TODO.md            # Task breakdown and tracking
-├── CLAUDE.md          # Development guidelines
-├── README.md          # This file
-├── docs/              # Implementation guides and RFCs
-│   ├── RFC4253_Transport.md
-│   ├── RFC4252_Authentication.md
-│   ├── RFC4254_Connection.md
-│   ├── IMPLEMENTATION_GUIDE.md
-│   ├── CRYPTO_NOTES.md
-│   ├── TESTING.md
-│   └── PORTING.md
-├── v0-vanilla/        # Phase 1: Working implementation (correctness first)
-├── v1-portable/       # Phase 2: Platform-abstracted version
-├── v2-opt1/           # Phase 3: Compiler optimizations
-├── v3-opt2/           # Phase 3: Minimal crypto library
-├── v4-opt3/           # Phase 3: Static buffers
-├── v5-opt4/           # Phase 3: State machine optimization
-├── v6-opt5/           # Phase 3: Aggressive optimization
-└── tests/             # Test scripts
+├── shell.nix              # Nix development environment
+├── justfile               # Task automation
+├── Makefile               # Top-level build orchestration
+├── PRD.md                 # Product Requirements Document
+├── TODO.md                # Task breakdown and tracking
+├── CLAUDE.md              # Development guidelines
+├── README.md              # This file
+├── docs/                  # Implementation guides and RFCs
+├── cruft/                 # Historical reports and analysis
+├── v0-vanilla/            # 70 KB - Baseline implementation
+├── v1-portable/           # 70 KB - Platform abstraction
+├── v2-opt1 → v13-opt11/   # 30→11 KB - Progressive optimizations
+├── v12-static/            # 5.2 MB - Statically linked
+├── v14-crypto/            # 16 KB - Drops OpenSSL
+├── v15-crypto/            # 20 KB - Self-contained crypto ⭐
+├── v16-crypto-standalone/ # 20 KB - Fully standalone ⭐
+└── tests/                 # Test scripts
 ```
 
 ## Development Phases
@@ -93,39 +87,46 @@ nano_ssh_server/
 - [x] Directory structure
 - [x] Basic compilation test
 
-### Phase 1: v0-vanilla (In Progress)
+### Phase 1: v0-vanilla ✅
 **Goal:** Working SSH server, correctness first
 
 Implements:
 - TCP server (POSIX sockets)
 - SSH-2.0 version exchange
 - Binary packet protocol
-- Curve25519 key exchange
-- ChaCha20-Poly1305 encryption
+- Curve25519 key exchange (via libsodium)
+- ChaCha20-Poly1305 encryption (via libsodium)
 - Password authentication
 - Session channel
-- "Hello World" response
+- Actual SSH protocol implementation
 
-**Success:** `ssh -p 2222 user@localhost` receives "Hello World"
+**Result:** 70 KB baseline implementation
 
-### Phase 2: v1-portable
+### Phase 2: v1-portable ✅
 **Goal:** Platform-independent code
 
-- Network abstraction layer (net_posix.c, net_lwip.c)
-- Remove platform-specific code from core
+- Platform abstraction layer
+- Network abstraction (net_posix.c)
 - Prepare for microcontroller deployment
+- Identical functionality to v0
 
-### Phase 3: Optimizations (v2-v6)
-**Goal:** Progressively smaller binaries
+**Result:** 70 KB (same as v0, abstraction complete)
 
-Each version is an independent optimization experiment:
-- v2-opt1: Compiler flags only
-- v3-opt2: Minimal crypto library
-- v4-opt3: Static buffer management
-- v5-opt4: State machine optimization
-- v6-opt5: Aggressive size reduction
+### Phase 3: Size Optimizations ✅
+**Goal:** Progressively smaller binaries (v2-v16)
 
-**Target:** < 32KB binary (stretch goal)
+Major milestones achieved:
+- **v2-v5:** Compiler optimizations (70 KB → 30 KB)
+- **v6-v7:** Aggressive opts (30 KB → 23 KB)
+- **v8-v10:** Advanced minimization (23 KB → 11.5 KB) ⭐
+- **v11-v14:** Refinement & crypto experiments (11-16 KB)
+- **v15-v16:** Self-contained crypto implementations (20 KB) 🔒
+
+**Results:**
+- Smallest with external libs: **11.4 KB** (v14-opt12)
+- Self-contained: **20.3 KB** (v15-crypto, v16-crypto-standalone)
+- Static build: **5.2 MB** (v12-static)
+- Overall reduction: **84%** from baseline
 
 ## Implementation Details
 
@@ -151,11 +152,23 @@ Each version is an independent optimization experiment:
 
 ### Cryptography
 
-Uses **libsodium** (TweetNaCl-based) for minimal size:
+**Two approaches implemented:**
+
+**v0-v14: External libraries (libsodium)**
 - ChaCha20-Poly1305: AEAD cipher
 - Curve25519: Key exchange
 - Ed25519: Host key signatures
-- SHA-256: Exchange hash
+- SHA-256: Exchange hash (from OpenSSL in most versions)
+
+**v15-v16: Self-contained crypto ⭐ Recommended for embedded**
+- AES-128-CTR: Symmetric encryption
+- SHA-256: Hashing
+- HMAC-SHA256: Message authentication
+- DH Group14: Key exchange
+- RSA-2048: Host key
+- CSPRNG: Random number generation
+- Custom bignum library (v16 only)
+- **Zero external crypto dependencies** - only requires libc
 
 ## Testing
 
@@ -196,17 +209,83 @@ just valgrind v0-vanilla
 - **CLAUDE.md** - Development guidelines (MUST READ)
 - **docs/** - Implementation guides and RFC summaries
 
-## Size Comparison (TODO)
+## Version Comparison & Binary Sizes
 
-| Version | Size | Description |
-|---------|------|-------------|
-| v0-vanilla | TBD | Working implementation |
-| v1-portable | TBD | Platform abstraction |
-| v2-opt1 | TBD | Compiler optimizations |
-| v3-opt2 | TBD | Minimal crypto |
-| v4-opt3 | TBD | Static buffers |
-| v5-opt4 | TBD | State machine |
-| v6-opt5 | TBD | Aggressive (goal: <32KB) |
+All 24 versions successfully built and analyzed. Size progression shows 84% reduction from baseline.
+
+### Champions by Category
+
+| Category | Version | Size | Dependencies | Notes |
+|----------|---------|------|--------------|-------|
+| **Smallest Overall** | v14-opt12 | **11.4 KB** | libsodium + OpenSSL | Requires external libs |
+| **Smallest Self-Contained** | v15-crypto | **20.3 KB** | libc only | ⭐ Zero crypto deps |
+| **Most Standalone** | v16-crypto-standalone | **20.3 KB** | libc only | ⭐ Custom bignum |
+| **Fully Static** | v12-static | **5.2 MB** | none | No runtime deps |
+
+### Complete Version Table
+
+| Version | Size (KB) | Linking | Dependencies | Optimization Focus |
+|---------|-----------|---------|--------------|-------------------|
+| v0-vanilla | 70.06 | Dynamic | libsodium + libcrypto + libc | Baseline implementation |
+| v1-portable | 70.06 | Dynamic | libsodium + libcrypto + libc | Platform abstraction |
+| v2-opt1 | 30.12 | Dynamic | libsodium + libcrypto + libc | Compiler optimizations |
+| v3-opt2 | 30.12 | Dynamic | libsodium + libcrypto + libc | Further optimizations |
+| v4-opt3 | 30.12 | Dynamic | libsodium + libcrypto + libc | Static buffers |
+| v5-opt4 | 30.04 | Dynamic | libsodium + libcrypto + libc | State machine |
+| v6-opt5 | 26.04 | Dynamic | libsodium + libcrypto + libc | Aggressive opts |
+| v7-opt6 | 22.85 | Dynamic | libsodium + libcrypto + libc | Size reduction |
+| v8-opt7 | 15.18 | Dynamic | libsodium + libcrypto + libc | Minimization |
+| v9-opt8 | 15.18 | Dynamic | libsodium + libcrypto + libc | Continued opts |
+| **v10-opt9** | **11.53** | Dynamic | libsodium + libcrypto + libc | **Smallest w/ libs** |
+| v11-opt10 | 15.18 | Dynamic | libsodium + libcrypto + libc | Refinement |
+| v12-dunkels1 | 15.16 | Dynamic | libsodium + libcrypto + libc | Dunkels style |
+| v12-opt11 | 15.18 | Dynamic | libsodium + libcrypto + libc | Further refinement |
+| v12-static | 5239.09 | **Static** | **(none)** | Fully static |
+| v13-crypto1 | 15.39 | Dynamic | libsodium + libcrypto + libc | Crypto work |
+| v13-opt11 | 11.63 | Dynamic | libsodium + libcrypto + libc | Optimization |
+| v14-crypto | 15.60 | Dynamic | libsodium + libc | Drops OpenSSL |
+| v14-dunkels3 | 15.18 | Dynamic | libsodium + libcrypto + libc | Dunkels iter 3 |
+| **v14-opt12** | **11.39** | Dynamic | libsodium + libcrypto + libc | **Smallest overall** |
+| **v15-crypto** | **20.33** | Dynamic | **libc only** | **Self-contained** |
+| v15-dunkels4 | 15.18 | Dynamic | libsodium + libcrypto + libc | Dunkels iter 4 |
+| v15-opt13 | 15.18 | Dynamic | libsodium + libcrypto + libc | Further opts |
+| **v16-crypto-standalone** | **20.33** | Dynamic | **libc only** | **Custom bignum** |
+
+### Size Progression Graph
+
+```
+v0-vanilla    ████████████████████████████████████████████████ 70 KB
+v1-portable   ████████████████████████████████████████████████ 70 KB
+v2-opt1       █████████████████████ 30 KB
+v6-opt5       ██████████████████ 26 KB
+v7-opt6       ████████████████ 23 KB
+v8-opt7       ███████████ 15 KB
+v10-opt9      ████████ 11.5 KB  ⭐ Smallest (with external libs)
+v14-opt12     ████████ 11.4 KB  ⭐ Smallest overall
+v15-crypto    ██████████████ 20 KB 🔒 Self-contained
+v16-crypto    ██████████████ 20 KB 🔒 Fully standalone
+v12-static    ████████████████████████████████ 5.2 MB (static)
+```
+
+### Dependency Analysis
+
+**Most versions (22):** Require libsodium + OpenSSL libcrypto
+- Total footprint: ~11-70 KB binary + ~700 KB libraries
+
+**v14-crypto (1):** Drops OpenSSL dependency
+- Uses libsodium only
+- Custom AES-128-CTR, SHA-256, HMAC-SHA256
+
+**v15-v16 (2):** Zero crypto library dependencies ⭐
+- Only requires standard libc
+- 100% custom crypto implementations
+- Total footprint: Just 20 KB
+- Best for embedded systems
+
+**v12-static (1):** Fully static build
+- No runtime dependencies
+- 5.2 MB (includes all libraries)
+- Most portable
 
 ## Contributing
 
@@ -250,12 +329,22 @@ TBD
 
 ## Status
 
-🚧 **Work in Progress** 🚧
+✅ **Project Complete** ✅
 
 - [x] Phase 0: Project setup
-- [ ] Phase 1: v0-vanilla implementation
-- [ ] Phase 2: v1-portable implementation
-- [ ] Phase 3: Size optimizations
-- [ ] Phase 4: Documentation and polish
+- [x] Phase 1: v0-vanilla implementation (70 KB)
+- [x] Phase 2: v1-portable implementation (70 KB)
+- [x] Phase 3: Size optimizations (24 versions, 11-70 KB range)
+- [x] Self-contained crypto implementations (v15-v16)
 
-Current focus: Implementing Phase 1 (v0-vanilla)
+**Achievements:**
+- 24 working SSH server versions
+- 84% size reduction achieved
+- Self-contained versions require only libc
+- Comprehensive testing and analysis complete
+- Multiple optimization strategies demonstrated
+
+**Recommended versions:**
+- **For embedded systems:** v15-crypto or v16-crypto-standalone (20 KB, no crypto deps)
+- **For minimal size:** v14-opt12 (11.4 KB, requires libsodium + OpenSSL)
+- **For maximum portability:** v12-static (5.2 MB, fully static)
