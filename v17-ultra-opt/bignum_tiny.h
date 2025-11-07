@@ -89,7 +89,105 @@ static inline uint32_t mul_add_word(uint32_t *result, uint32_t a, uint32_t b, ui
     return (uint32_t)(prod >> 32);
 }
 
-/* Multiplication: r = a * b (schoolbook algorithm) */
+/* Double-width bignum for intermediate multiplication results */
+typedef struct {
+    uint32_t array[BN_WORDS * 2];  /* 4096 bits */
+} bn_double_t;
+
+/* Multiplication: r_double = a * b (full width result) */
+static void bn_mul_full(bn_double_t *r, const bn_t *a, const bn_t *b) {
+    /* Zero result */
+    for (int i = 0; i < BN_WORDS * 2; i++) {
+        r->array[i] = 0;
+    }
+
+    /* Schoolbook multiplication with full width */
+    for (int i = 0; i < BN_WORDS; i++) {
+        uint32_t carry = 0;
+        for (int j = 0; j < BN_WORDS; j++) {
+            carry = mul_add_word(&r->array[i + j], a->array[i], b->array[j], carry);
+        }
+        /* Store final carry */
+        r->array[i + BN_WORDS] = carry;
+    }
+}
+
+/* Modular reduction of double-width number: r = a_double % m */
+/* Uses decomposition: (H * 2^k + L) mod m where k = BN_WORDS * 32 */
+static void bn_mod_double(bn_t *r, const bn_double_t *a, const bn_t *m) {
+    bn_t low, high, temp1, temp2;
+    bn_t power;  /* Will hold 2^k mod m where k = BN_WORDS * 32 */
+
+    /* Extract low and high parts */
+    for (int i = 0; i < BN_WORDS; i++) {
+        low.array[i] = a->array[i];
+        high.array[i] = a->array[BN_WORDS + i];
+    }
+
+    /* Check if high part is zero - common case */
+    if (bn_is_zero(&high)) {
+        bn_mod(r, &low, m);
+        return;
+    }
+
+    /* Compute 2^(BN_WORDS * 32) mod m using repeated squaring */
+    /* Start with 2^1 */
+    bn_zero(&power);
+    power.array[0] = 2;
+
+    /* Square it (BN_WORDS * 32 - 1) times to get 2^(2^(BN_WORDS*32)) */
+    /* Actually, we want 2^(BN_WORDS * 32) = 2^2048 */
+    /* Start with 2, square to get 2^2, square to get 2^4, etc. */
+    /* After k squarings we have 2^(2^k) */
+    /* We want 2^2048, so we need to compute it differently */
+
+    /* Instead: compute (2^32)^BN_WORDS mod m */
+    /* 2^32 = 0x100000000, which is word[1] = 1 */
+    bn_zero(&power);
+    power.array[1] = 1;  /* 2^32 */
+    bn_mod(&power, &power, m);  /* Reduce it */
+
+    /* Now raise power to the BN_WORDS power using exponentiation */
+    /* Actually this is getting too complex. Let me use a simpler approach: */
+    /* Compute result = 0, then for each word in high, add (word * 2^(k*32)) mod m */
+
+    bn_zero(r);
+
+    for (int i = 0; i < BN_WORDS; i++) {
+        if (high.array[i] == 0) continue;
+
+        /* Compute 2^((BN_WORDS + i) * 32) mod m */
+        /* This is 2 raised to the power (BN_WORDS + i) * 32 */
+        bn_zero(&temp1);
+        temp1.array[0] = 1;  /* Start with 1 */
+
+        /* Multiply by 2, (BN_WORDS + i) * 32 times, reducing each time */
+        for (int bit = 0; bit < (BN_WORDS + i) * 32; bit++) {
+            bn_add(&temp2, &temp1, &temp1);  /* temp2 = temp1 * 2 */
+            bn_mod(&temp1, &temp2, m);       /* temp1 = temp2 mod m */
+        }
+
+        /* Now temp1 = 2^((BN_WORDS + i) * 32) mod m */
+        /* Multiply by high.array[i] */
+        for (uint32_t j = 0; j < high.array[i]; j++) {
+            bn_add(&temp2, r, &temp1);
+            bn_mod(r, &temp2, m);
+        }
+    }
+
+    /* Add low part */
+    bn_add(&temp1, r, &low);
+    bn_mod(r, &temp1, m);
+}
+
+/* Modular multiplication: r = (a * b) mod m using double-width */
+static void bn_mulmod(bn_t *r, const bn_t *a, const bn_t *b, const bn_t *m) {
+    bn_double_t temp;
+    bn_mul_full(&temp, a, b);
+    bn_mod_double(r, &temp, m);
+}
+
+/* Multiplication: r = a * b (truncated to BN_WORDS) */
 static void bn_mul(bn_t *r, const bn_t *a, const bn_t *b) {
     bn_t temp;
     bn_zero(&temp);
@@ -138,7 +236,7 @@ static void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
 
 /* Modular exponentiation: r = base^exp mod m (binary method) */
 static void bn_modexp(bn_t *r, const bn_t *base, const bn_t *exp, const bn_t *mod) {
-    bn_t result, temp_base, temp;
+    bn_t result, temp_base;
 
     /* result = 1 */
     bn_zero(&result);
@@ -160,8 +258,7 @@ static void bn_modexp(bn_t *r, const bn_t *base, const bn_t *exp, const bn_t *mo
         for (int j = 0; j < 32; j++) {
             if (exp_word & 1) {
                 /* result = (result * temp_base) % mod */
-                bn_mul(&temp, &result, &temp_base);
-                bn_mod(&result, &temp, mod);
+                bn_mulmod(&result, &result, &temp_base, mod);
             }
 
             exp_word >>= 1;
@@ -169,8 +266,7 @@ static void bn_modexp(bn_t *r, const bn_t *base, const bn_t *exp, const bn_t *mo
             /* Only square if not the last bit of the last word */
             if (i < BN_WORDS - 1 || j < 31) {
                 /* temp_base = (temp_base * temp_base) % mod */
-                bn_mul(&temp, &temp_base, &temp_base);
-                bn_mod(&temp_base, &temp, mod);
+                bn_mulmod(&temp_base, &temp_base, &temp_base, mod);
             }
         }
     }
