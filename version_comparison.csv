@@ -1,0 +1,25 @@
+Version,Size_Bytes,Size_KB,Linking_Type,libsodium,libcrypto,libc_only,Custom_Crypto,Notes
+v0-vanilla,71744,70.06,Dynamic,Yes,Yes,No,No,Baseline implementation with debug info
+v1-portable,71744,70.06,Dynamic,Yes,Yes,No,No,Platform abstraction layer
+v2-opt1,30848,30.12,Dynamic,Yes,Yes,No,No,Compiler optimizations
+v3-opt2,30848,30.12,Dynamic,Yes,Yes,No,No,Further optimizations
+v4-opt3,30848,30.12,Dynamic,Yes,Yes,No,No,Static buffers
+v5-opt4,30768,30.04,Dynamic,Yes,Yes,No,No,State machine optimization
+v6-opt5,26672,26.04,Dynamic,Yes,Yes,No,No,Aggressive optimizations
+v7-opt6,23408,22.85,Dynamic,Yes,Yes,No,No,Additional size reduction
+v8-opt7,15552,15.18,Dynamic,Yes,Yes,No,No,Further minimization
+v9-opt8,15552,15.18,Dynamic,Yes,Yes,No,No,Continued optimization
+v10-opt9,11816,11.53,Dynamic,Yes,Yes,No,No,Smallest with external libs
+v11-opt10,15552,15.18,Dynamic,Yes,Yes,No,No,Refinement
+v12-dunkels1,15528,15.16,Dynamic,Yes,Yes,No,No,Dunkels-style optimization
+v12-opt11,15552,15.18,Dynamic,Yes,Yes,No,No,Further refinement
+v12-static,5364832,5239.09,Static,Yes,Yes,No,No,Fully static build (5.2 MB)
+v13-crypto1,15760,15.39,Dynamic,Yes,Yes,No,No,Initial crypto work
+v13-opt11,11912,11.63,Dynamic,Yes,Yes,No,No,Optimization iteration
+v14-crypto,15976,15.60,Dynamic,Yes,No,No,Partial,Drops OpenSSL - custom AES/SHA
+v14-dunkels3,15552,15.18,Dynamic,Yes,Yes,No,No,Dunkels iteration 3
+v14-opt12,11664,11.39,Dynamic,Yes,Yes,No,No,Smallest overall (dynamic)
+v15-crypto,20824,20.33,Dynamic,No,No,Yes,Full,100% self-contained crypto
+v15-dunkels4,15552,15.18,Dynamic,Yes,Yes,No,No,Dunkels iteration 4
+v15-opt13,15552,15.18,Dynamic,Yes,Yes,No,No,Further optimization
+v16-crypto-standalone,20824,20.33,Dynamic,No,No,Yes,Full,Custom bignum + all crypto
