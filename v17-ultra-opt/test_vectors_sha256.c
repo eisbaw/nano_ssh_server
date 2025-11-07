@@ -1,0 +1,145 @@
+/* SHA-256 Test Vectors
+ * Sources: NIST FIPS 180-4, RFC 4634, OpenSSL
+ * Test-Driven Development for SHA-256 implementation
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include "sha256_minimal.h"
+
+typedef struct {
+    const char *name;
+    const char *input;
+    const uint8_t expected[32];
+} sha256_test_vector_t;
+
+/* Standard SHA-256 test vectors - verified with OpenSSL */
+static const sha256_test_vector_t test_vectors[] = {
+    {
+        .name = "Empty string",
+        .input = "",
+        .expected = {
+            0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+            0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+            0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
+            0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55
+        }
+    },
+    {
+        .name = "abc",
+        .input = "abc",
+        .expected = {
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+            0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+            0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+            0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
+        }
+    },
+    {
+        .name = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+        .input = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+        .expected = {
+            0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8,
+            0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e, 0x60, 0x39,
+            0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67,
+            0xf6, 0xec, 0xed, 0xd4, 0x19, 0xdb, 0x06, 0xc1
+        }
+    },
+    {
+        .name = "The quick brown fox... (60 bytes)",
+        .input = "The quick brown fox jumps over the lazy dog. This is a test.",
+        .expected = {
+            0x00, 0x87, 0xb9, 0x6e, 0x24, 0xa6, 0x92, 0x61,
+            0x79, 0xac, 0x34, 0xea, 0x0c, 0xe3, 0x44, 0xf6,
+            0x03, 0x4b, 0x49, 0x68, 0x5e, 0xaa, 0xb4, 0x66,
+            0x32, 0xc5, 0xc1, 0x8c, 0x41, 0x52, 0x96, 0xba
+        }
+    },
+    {
+        .name = "Multi-block (139 bytes)",
+        .input = "The quick brown fox jumps over the lazy dog. "
+                 "The quick brown fox jumps over the lazy dog. "
+                 "The quick brown fox jumps over the lazy dog.",
+        .expected = {
+            0x3f, 0x55, 0x28, 0x46, 0x2b, 0x83, 0x89, 0xdd,
+            0xdf, 0xa6, 0x91, 0x68, 0x21, 0x52, 0x58, 0x85,
+            0xa7, 0xf0, 0xda, 0x9b, 0x56, 0xad, 0x35, 0x1b,
+            0x48, 0x09, 0x9f, 0x80, 0xfd, 0x17, 0x75, 0xca
+        }
+    },
+    {
+        .name = "Single byte 'a'",
+        .input = "a",
+        .expected = {
+            0xca, 0x97, 0x81, 0x12, 0xca, 0x1b, 0xbd, 0xca,
+            0xfa, 0xc2, 0x31, 0xb3, 0x9a, 0x23, 0xdc, 0x4d,
+            0xa7, 0x86, 0xef, 0xf8, 0x14, 0x7c, 0x4e, 0x72,
+            0xb9, 0x80, 0x77, 0x85, 0xaf, 0xee, 0x48, 0xbb
+        }
+    },
+    {
+        .name = "56 bytes boundary test",
+        .input = "12345678901234567890123456789012345678901234567890123456",
+        .expected = {
+            0x0b, 0xe6, 0x6c, 0xe7, 0x2c, 0x24, 0x67, 0xe7,
+            0x93, 0x20, 0x29, 0x06, 0x00, 0x06, 0x72, 0x30,
+            0x66, 0x61, 0x79, 0x16, 0x22, 0xe0, 0xca, 0x9a,
+            0xdf, 0x4a, 0x89, 0x55, 0xb2, 0xed, 0x18, 0x9c
+        }
+    },
+    {
+        .name = "63 bytes boundary test",
+        .input = "123456789012345678901234567890123456789012345678901234567890123",
+        .expected = {
+            0xb9, 0x7f, 0x6a, 0x27, 0x8e, 0xf6, 0xa1, 0x59,
+            0xba, 0x66, 0x0d, 0xc9, 0x9f, 0xc5, 0x42, 0x6a,
+            0xe3, 0xc1, 0xe4, 0xe0, 0x8c, 0x47, 0x18, 0x27,
+            0xd6, 0x60, 0xbf, 0x36, 0xcf, 0xb2, 0x36, 0xe7
+        }
+    }
+};
+
+int main(void) {
+    int passed = 0;
+    int failed = 0;
+    int total = sizeof(test_vectors) / sizeof(test_vectors[0]);
+
+    printf("=== SHA-256 Test Vectors ===\n");
+    printf("Running %d test vectors...\n\n", total);
+
+    for (int i = 0; i < total; i++) {
+        const sha256_test_vector_t *tv = &test_vectors[i];
+        uint8_t hash[32];
+        size_t input_len = strlen(tv->input);
+
+        /* Compute SHA-256 */
+        sha256(hash, (const uint8_t *)tv->input, input_len);
+
+        /* Verify */
+        if (memcmp(hash, tv->expected, 32) == 0) {
+            printf("[PASS] %s\n", tv->name);
+            passed++;
+        } else {
+            printf("[FAIL] %s\n", tv->name);
+            printf("  Input length: %zu bytes\n", input_len);
+            printf("  Expected: ");
+            for (int j = 0; j < 32; j++) {
+                printf("%02x", tv->expected[j]);
+            }
+            printf("\n  Got:      ");
+            for (int j = 0; j < 32; j++) {
+                printf("%02x", hash[j]);
+            }
+            printf("\n");
+            failed++;
+        }
+    }
+
+    printf("\n=============================\n");
+    printf("Results: %d passed, %d failed out of %d tests\n", 
+           passed, failed, total);
+    printf("=============================\n");
+
+    return (failed == 0) ? 0 : 1;
+}
