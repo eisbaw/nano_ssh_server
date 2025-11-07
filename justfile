@@ -186,6 +186,21 @@ clean-musl:
     @rm -rf build-musl test_musl test_glibc
     @echo "Cleaned musl build artifacts"
 
+# Build v16-static with musl libc (requires nix-shell)
+build-v16-static:
+    @echo "Building v16-static with musl libc..."
+    @echo "This will enter the musl nix-shell environment automatically"
+    @nix-shell shell-musl.nix --run "cd v16-static && make clean && make"
+    @echo ""
+    @echo "✅ v16-static built successfully!"
+    @echo ""
+    @echo "Binary information:"
+    @ls -lh v16-static/nano_ssh_server
+    @echo ""
+    @echo "To run: just run v16-static"
+    @echo "To test: just test v16-static"
+    @echo ""
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
@@ -199,6 +214,7 @@ help:
     @echo ""
     @echo "Musl builds:"
     @echo "  just build-musl           # Build with musl (native, no Docker)"
+    @echo "  just build-v16-static     # Build v16-static with musl"
     @echo "  just clean-musl           # Clean musl build artifacts"
     @echo ""
     @echo "Development:"
