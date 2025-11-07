@@ -20,12 +20,13 @@ sudo apt-get install gcc make just openssh-client libsodium-dev valgrind
 
 ```bash
 # Build any version
-just build v15-crypto          # Recommended: 20 KB, self-contained
-just build v14-opt12           # Smallest: 11.4 KB (requires libs)
-just build v0-vanilla          # Baseline: 70 KB
+just build v16-crypto-standalone  # Best: 20 KB, 100% standalone
+just build v15-crypto             # Good: 20 KB, uses tiny-bignum-c
+just build v14-opt12              # Smallest: 11.4 KB (needs libs)
+just build v0-vanilla             # Baseline: 70 KB
 
 # Run the server (listens on port 2222)
-just run v15-crypto
+just run v16-crypto-standalone
 
 # Connect from another terminal
 ssh -p 2222 user@localhost     # Password: password123
@@ -45,9 +46,9 @@ just valgrind <version>        # Check for memory leaks
 | Category | Version | Size | Dependencies | Use Case |
 |----------|---------|------|--------------|----------|
 | **Smallest Overall** | v14-opt12 | **11.4 KB** | libsodium + OpenSSL + libc | Absolute minimum size |
-| **Best for Embedded** | v15-crypto | **20.3 KB** | **libc only** | No external crypto libs |
-| **Most Standalone** | v16-crypto-standalone | **20.3 KB** | **libc only** | Custom bignum + crypto |
-| **Maximum Portability** | v12-static | **5.2 MB** | **(none)** | Fully static, no runtime deps |
+| **Best for Embedded** | v15-crypto | **20.3 KB** | libc + tiny-bignum-c | Self-contained crypto |
+| **100% Standalone** | v16-crypto-standalone | **20.3 KB** | **libc only** | Zero external code |
+| **Maximum Portability** | v12-static | **5.2 MB** | **(none)** | Fully static build |
 
 ### 📊 Complete Version Table
 
@@ -73,10 +74,10 @@ just valgrind <version>        # Check for memory leaks
 | v14-crypto | 15.60 | Dynamic | libsodium + libc | Drop OpenSSL (custom AES/SHA) |
 | v14-dunkels3 | 15.18 | Dynamic | libsodium + libcrypto + libc | Dunkels iter 3 |
 | **v14-opt12** | **11.39** | Dynamic | libsodium + libcrypto + libc | **Smallest overall** |
-| **v15-crypto** | **20.33** | Dynamic | **libc only** | **100% self-contained crypto** |
+| **v15-crypto** | **20.33** | Dynamic | **libc + tiny-bignum-c** | **Self-contained crypto** |
 | v15-dunkels4 | 15.18 | Dynamic | libsodium + libcrypto + libc | Dunkels iter 4 |
 | v15-opt13 | 15.18 | Dynamic | libsodium + libcrypto + libc | Final refinement |
-| **v16-crypto-standalone** | **20.33** | Dynamic | **libc only** | **Custom bignum library** |
+| **v16-crypto-standalone** | **20.33** | Dynamic | **libc only** | **100% standalone (custom bignum)** |
 
 ### 📈 Size Progression
 
@@ -105,12 +106,19 @@ v12-static    ██████████████████████
 - Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256
 - Still uses libsodium for: Curve25519, Ed25519
 
-**v15-v16 (2/24):** libc only ⭐ **Recommended for embedded systems**
-- **Zero external crypto dependencies**
-- 100% custom implementations of all crypto primitives
-- Total deployment footprint: Just 20 KB
-- Includes: AES-128-CTR, SHA-256, HMAC-SHA256, DH Group14, RSA-2048, CSPRNG
-- v16 adds: Custom bignum library (no external bignum code)
+**v15-crypto (1/24):** libc only + tiny-bignum-c ⭐ **Recommended for embedded systems**
+- **Zero external crypto library dependencies** (no libsodium, no OpenSSL)
+- Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256, DH Group14, RSA-2048, CSPRNG
+- Uses tiny-bignum-c (public domain, ~2-3 KB) for bignum operations
+- Total deployment footprint: 20 KB binary + tiny-bignum-c source
+- Best balance: self-contained crypto with proven bignum library
+
+**v16-crypto-standalone (1/24):** libc only ⭐⭐ **100% standalone**
+- **Truly zero external dependencies** - no crypto libs, no bignum libs
+- 100% custom code including custom bignum implementation (~500-800 bytes)
+- Same crypto as v15 but with bignum_tiny.h (custom, size-optimized)
+- Total deployment footprint: Just 20 KB (same size as v15!)
+- Ultimate independence: can be audited/modified end-to-end
 
 **v12-static (1/24):** No runtime dependencies
 - Fully static build (includes glibc + all crypto libraries)
@@ -151,10 +159,10 @@ This project demonstrates **24 different optimization strategies** applied itera
 - Disabled PIE (Position Independent Executable) where appropriate
 
 ### Library Strategy (v12-v16)
-- **v12-static:** Static linking (trade size for portability)
-- **v14-crypto:** Drop OpenSSL, implement custom AES/SHA
-- **v15-crypto:** Drop libsodium, implement all crypto from scratch
-- **v16-crypto:** Add custom bignum (eliminates all external crypto code)
+- **v12-static:** Static linking (trade size for portability - 5.2 MB)
+- **v14-crypto:** Drop OpenSSL, implement custom AES/SHA (still uses libsodium)
+- **v15-crypto:** Drop libsodium, implement all crypto (uses tiny-bignum-c for DH/RSA)
+- **v16-crypto:** Replace tiny-bignum-c with custom bignum_tiny.h (~500-800 bytes, 100% standalone)
 
 ### Protocol Minimization (all versions)
 - Single cipher: ChaCha20-Poly1305 (v0-v14) or AES-128-CTR (v15-v16)
@@ -189,11 +197,19 @@ This project demonstrates **24 different optimization strategies** applied itera
 - OpenSSL for SHA-256, HMAC (in most versions)
 - Minimal code but requires ~700 KB of libraries
 
-**v15-v16: Self-Contained ⭐**
-- Custom implementations of all crypto primitives
-- Zero external crypto dependencies (only libc)
+**v15-crypto: Self-Contained with Bignum Library ⭐**
+- Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256, DH Group14, RSA-2048, CSPRNG
+- Uses tiny-bignum-c (public domain, ~2-3 KB source) for DH/RSA bignum operations
+- Zero external crypto library dependencies (no libsodium, no OpenSSL)
 - Based on well-known algorithms with standard test vectors
-- v16 includes custom bignum library (1 KB overhead)
+- Best for: Embedded systems where you want proven bignum code
+
+**v16-crypto-standalone: 100% Standalone ⭐⭐**
+- All crypto from v15 PLUS custom bignum_tiny.h implementation (~500-800 bytes)
+- Truly zero external dependencies (only libc standard library)
+- Same 20 KB size as v15 despite custom bignum (efficient implementation)
+- Can be fully audited/modified without any external code
+- Best for: Maximum independence, complete code ownership
 
 ## Project Structure
 
@@ -261,9 +277,11 @@ This server:
 
 | Use Case | Recommended Version | Why |
 |----------|-------------------|-----|
-| **Embedded systems** | v15-crypto or v16-crypto-standalone | Only 20 KB, zero crypto lib dependencies |
+| **Embedded systems (proven libs)** | v15-crypto | 20 KB, custom crypto + tiny-bignum-c (public domain) |
+| **Embedded systems (100% custom)** | v16-crypto-standalone | 20 KB, truly zero external code (custom bignum) |
 | **Absolute minimum size** | v14-opt12 | 11.4 KB but requires libsodium + OpenSSL (~700 KB total) |
 | **Maximum portability** | v12-static | 5.2 MB but runs anywhere (no runtime dependencies) |
+| **Full code ownership** | v16-crypto-standalone | Can audit/modify every line - no external dependencies |
 | **Learning/development** | v0-vanilla | 70 KB, readable code with debug symbols |
 | **Platform abstraction** | v1-portable | 70 KB, clean separation for porting |
 
