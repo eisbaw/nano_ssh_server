@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 
 /*
  * Fill buffer with cryptographically secure random bytes

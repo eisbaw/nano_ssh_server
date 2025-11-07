@@ -93,14 +93,16 @@ static inline uint32_t mul_add_word(uint32_t *result, uint32_t a, uint32_t b, ui
 static void bn_mul(bn_t *r, const bn_t *a, const bn_t *b) {
     bn_t temp;
     bn_zero(&temp);
-    
+
     for (int i = 0; i < BN_WORDS; i++) {
         uint32_t carry = 0;
-        for (int j = 0; j < BN_WORDS - i; j++) {
-            carry = mul_add_word(&temp.array[i + j], a->array[i], b->array[j], carry);
+        for (int j = 0; j < BN_WORDS; j++) {
+            if (i + j < BN_WORDS) {
+                carry = mul_add_word(&temp.array[i + j], a->array[i], b->array[j], carry);
+            }
         }
     }
-    
+
     *r = temp;
 }
 
@@ -137,32 +139,42 @@ static void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
 /* Modular exponentiation: r = base^exp mod m (binary method) */
 static void bn_modexp(bn_t *r, const bn_t *base, const bn_t *exp, const bn_t *mod) {
     bn_t result, temp_base, temp;
-    
+
     /* result = 1 */
     bn_zero(&result);
     result.array[0] = 1;
-    
+
     /* temp_base = base % mod */
     bn_mod(&temp_base, base, mod);
-    
+
+    /* Check if exponent is zero */
+    if (bn_is_zero(exp)) {
+        *r = result;  /* base^0 = 1 */
+        return;
+    }
+
     /* Binary exponentiation (right-to-left) */
     for (int i = 0; i < BN_WORDS; i++) {
         uint32_t exp_word = exp->array[i];
+
         for (int j = 0; j < 32; j++) {
             if (exp_word & 1) {
                 /* result = (result * temp_base) % mod */
                 bn_mul(&temp, &result, &temp_base);
                 bn_mod(&result, &temp, mod);
             }
-            
-            /* temp_base = (temp_base * temp_base) % mod */
-            bn_mul(&temp, &temp_base, &temp_base);
-            bn_mod(&temp_base, &temp, mod);
-            
+
             exp_word >>= 1;
+
+            /* Only square if not the last bit of the last word */
+            if (i < BN_WORDS - 1 || j < 31) {
+                /* temp_base = (temp_base * temp_base) % mod */
+                bn_mul(&temp, &temp_base, &temp_base);
+                bn_mod(&temp_base, &temp, mod);
+            }
         }
     }
-    
+
     *r = result;
 }
 
