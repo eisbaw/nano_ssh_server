@@ -14,7 +14,7 @@ CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
 LDFLAGS = -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr
 
-SRCS = main.c
+SRCS = main.c bn_tinybignum.c
 OBJS = $(SRCS:.c=.o)
 TARGET = nano_ssh_server
 TARGET_COMPRESSED = nano_ssh_server.upx

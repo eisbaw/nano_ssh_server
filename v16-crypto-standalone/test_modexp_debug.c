@@ -1,99 +1,113 @@
 /*
- * Debug modular exponentiation
+ * Debug modular exponentiation with tiny-bignum-c
  */
-
 #include <stdio.h>
-#include <string.h>
 #include <stdint.h>
-#include "bignum_simple.h"
+#include "bignum_adapter.h"
+#include "rsa.h"
 
-void print_bn(const char *name, const bn_t *x) {
-    uint8_t bytes[32];
-    bn_to_bytes(x, bytes, 32);
-    printf("%s (first 32 bytes): ", name);
-    for (int i = 0; i < 32; i++) {
-        printf("%02x", bytes[i]);
-    }
-    printf("\n");
+static void print_bn_first(const char *name, const bn_t *n) {
+    printf("%s: array[0] = 0x%08x\n", name, n->array[0]);
 }
 
 int main() {
-    bn_t base, exp, mod, result;
+    rsa_key_t key;
+    bn_t m, c;
 
-    /* Test: 5^3 mod 13 = 125 mod 13 = 8 */
-    bn_zero(&base);
-    base.array[0] = 5;
+    printf("Debug: Testing modular exponentiation step by step\n\n");
 
-    bn_zero(&exp);
-    exp.array[0] = 3;
+    rsa_init_key(&key);
 
-    bn_zero(&mod);
-    mod.array[0] = 13;
+    /* Test: 42^65537 mod n */
+    bn_zero(&m);
+    bignum_from_int((struct bn*)&m, 42);
 
-    printf("=== Simple Test: 5^3 mod 13 (expected: 8) ===\n");
-    print_bn("base", &base);
-    print_bn("exp", &exp);
-    print_bn("mod", &mod);
+    printf("Initial values:\n");
+    print_bn_first("base (m=42)", &m);
+    print_bn_first("exponent (e=65537)", &key.e);
+    print_bn_first("modulus (n)", &key.n);
+    printf("\n");
 
-    bn_modexp(&result, &base, &exp, &mod);
-    print_bn("result", &result);
-    printf("Result value: %u\n", result.array[0]);
+    /* Manually trace through bn_modexp logic */
+    bn_t result, base_copy, temp;
 
-    if (result.array[0] == 8) {
-        printf("✓ Simple test PASSED\n\n");
+    /* result = 1 */
+    bignum_init(&result);
+    bignum_from_int(&result, 1);
+    print_bn_first("result initialized to 1", &result);
+
+    /* base_copy = base mod m */
+    bignum_assign(&base_copy, (struct bn*)&m);
+    print_bn_first("base_copy = base", &base_copy);
+
+    if (bignum_cmp(&base_copy, (struct bn*)&key.n) >= 0) {
+        printf("base >= modulus, reducing...\n");
+        bignum_mod(&base_copy, (struct bn*)&key.n, &base_copy);
+        print_bn_first("base_copy after mod", &base_copy);
     } else {
-        printf("✗ Simple test FAILED (expected 8, got %u)\n\n", result.array[0]);
+        printf("base < modulus, no reduction needed\n");
     }
 
-    /* Test: 2^8 mod 17 = 256 mod 17 = 1 */
-    bn_zero(&base);
-    base.array[0] = 2;
+    /* Find highest non-zero word in exponent */
+    int max_word = -1;
+    for (int i = BN_ARRAY_SIZE - 1; i >= 0; i--) {
+        if (key.e.array[i] != 0) {
+            max_word = i;
+            break;
+        }
+    }
+    printf("max_word in exponent: %d\n", max_word);
 
-    bn_zero(&exp);
-    exp.array[0] = 8;
-
-    bn_zero(&mod);
-    mod.array[0] = 17;
-
-    printf("=== Test: 2^8 mod 17 (expected: 1) ===\n");
-    print_bn("base", &base);
-    print_bn("exp", &exp);
-    print_bn("mod", &mod);
-
-    bn_modexp(&result, &base, &exp, &mod);
-    print_bn("result", &result);
-    printf("Result value: %u\n", result.array[0]);
-
-    if (result.array[0] == 1) {
-        printf("✓ Test PASSED\n\n");
-    } else {
-        printf("✗ Test FAILED (expected 1, got %u)\n\n", result.array[0]);
+    if (max_word < 0) {
+        printf("ERROR: Exponent is zero!\n");
+        return 1;
     }
 
-    /* Test: 3^7 mod 23 = 2187 mod 23 = 3 */
-    bn_zero(&base);
-    base.array[0] = 3;
+    printf("\nStarting binary exponentiation...\n");
+    printf("Processing exponent word 0: 0x%08x\n", key.e.array[0]);
 
-    bn_zero(&exp);
-    exp.array[0] = 7;
+    /* Process first few bits manually */
+    DTYPE exp_word = key.e.array[0];
+    int bits_processed = 0;
 
-    bn_zero(&mod);
-    mod.array[0] = 23;
+    for (int j = 0; j < 32 && bits_processed < 5; j++, bits_processed++) {
+        printf("\nBit %d: %d\n", j, exp_word & 1);
 
-    printf("=== Test: 3^7 mod 23 (expected: 3) ===\n");
-    print_bn("base", &base);
-    print_bn("exp", &exp);
-    print_bn("mod", &mod);
+        if (exp_word & 1) {
+            printf("  Bit is 1: result = (result * base_copy) mod n\n");
+            bignum_mul(&result, &base_copy, &temp);
+            print_bn_first("  temp after mul", &temp);
+            bignum_mod(&temp, (struct bn*)&key.n, &result);
+            print_bn_first("  result after mod", &result);
+        } else {
+            printf("  Bit is 0: skip multiply\n");
+        }
 
-    bn_modexp(&result, &base, &exp, &mod);
-    print_bn("result", &result);
-    printf("Result value: %u\n", result.array[0]);
+        exp_word >>= 1;
 
-    if (result.array[0] == 3) {
-        printf("✓ Test PASSED\n");
-    } else {
-        printf("✗ Test FAILED (expected 3, got %u)\n", result.array[0]);
+        if (exp_word == 0 && 0 == max_word) {
+            printf("  All bits processed, stopping\n");
+            break;
+        }
+
+        printf("  Squaring base: base_copy = (base_copy * base_copy) mod n\n");
+        bignum_mul(&base_copy, &base_copy, &temp);
+        print_bn_first("  temp after square", &temp);
+        bignum_mod(&temp, (struct bn*)&key.n, &base_copy);
+        print_bn_first("  base_copy after mod", &base_copy);
     }
 
-    return 0;
+    printf("\n\nNow call bn_modexp and check result:\n");
+    bn_modexp(&c, &m, &key.e, &key.n);
+    print_bn_first("Final result", &c);
+
+    printf("\nExpected: 0xf91e0d65 (4179496293)\n");
+
+    if (c.array[0] == 0xf91e0d65) {
+        printf("✓ CORRECT!\n");
+        return 0;
+    } else {
+        printf("✗ Wrong result\n");
+        return 1;
+    }
 }

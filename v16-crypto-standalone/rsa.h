@@ -11,7 +11,7 @@
 #ifndef RSA_H
 #define RSA_H
 
-#include "bignum_simple.h"
+#include "bignum_adapter.h"
 #include "sha256_minimal.h"
 #include <string.h>
 

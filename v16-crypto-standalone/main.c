@@ -20,7 +20,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "csprng.h"
-#include "bignum_simple.h"
+#include "bignum_adapter.h"
 #include "diffie_hellman.h"
 #include "rsa.h"
 #include "aes128_minimal.h"
