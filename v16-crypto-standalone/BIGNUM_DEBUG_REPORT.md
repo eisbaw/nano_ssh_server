@@ -128,3 +128,59 @@ The bug appears to be in `bignum_div()` (line 277-320 in bn_tinybignum.c), likel
 12. `test_tiny_rsa.c` - Full RSA test with 42^65537
 
 All tests demonstrate systematic investigation of the bug location.
+
+---
+
+## UPDATE: Root Cause Identified!
+
+### The Bug in tiny-bignum-c
+
+**Location**: `bn_tinybignum.c` line 295
+
+```c
+if (denom.array[BN_ARRAY_SIZE - 1] >= half_max)
+{
+    overflow = true;
+    break;
+}
+```
+
+**Values for 2048-bit RSA**:
+- `half_max = 0x80000000` (constant)
+- `n.array[63] = 0x979d3ea7` (RSA modulus highest word)
+- Check: `0x979d3ea7 >= 0x80000000` → **TRUE**
+
+**Result**: Division algorithm exits immediately, returns quotient=0
+
+**Impact**:
+- `(2*n) / n` returns 0 instead of 2
+- `(2*n) mod n` returns `2*n` instead of 0
+- All modular exponentiation fails for large modulus
+
+**Why This Happens**:
+- Original tiny-bignum-c designed for 1024-bit numbers (128 bytes)
+- For 1024-bit, high word rarely has MSB set
+- For 2048-bit RSA modulus, high word **naturally** has MSB set
+- Overflow check is a false positive for properly-sized 2048-bit numbers
+
+### Test Evidence
+
+**Test Files Created**:
+13. `test_large_mod.c` - Shows (2*n) mod n fails
+14. `test_2n_manual.c` - Confirms mod bug with manual 2*n
+15. `test_div_issue.c` - Division works for small numbers
+16. `test_overflow_check.c` - **PROVES overflow check triggers prematurely**
+
+**Findings**:
+- `(n-1) mod n = n-1` ✓ WORKS
+- `(n+1) mod n = 1` ✓ WORKS  
+- `(2*n) mod n = 2*n` ✗ FAILS (should be 0)
+- Overflow check triggers on RSA modulus: `0x979d3ea7 >= 0x80000000`
+
+## Final Conclusion
+
+tiny-bignum-c cannot be used for RSA-2048 without fixing the overflow detection in `bignum_div()`. The library was designed for smaller numbers and the overflow check is incompatible with 2048-bit RSA modulus values.
+
+##  Recommended Solution
+
+Use **BearSSL's bignum implementation** for RSA-2048 operations.
