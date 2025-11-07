@@ -288,18 +288,37 @@ void bignum_div(struct bn* a, struct bn* b, struct bn* c)
   bignum_assign(&denom, b);                   // denom = b
   bignum_assign(&tmp, a);                     // tmp   = a
 
-  const DTYPE_TMP half_max = 1 + (DTYPE_TMP)(MAX_VAL / 2);
+  /* Shift denom and current left until denom > a
+   * This finds the highest bit position for division.
+   *
+   * FIXED: Original overflow check was (denom.array[BN_ARRAY_SIZE-1] >= 0x80000000),
+   * which is too conservative. For 2048-bit RSA, many valid numbers have MSB set.
+   *
+   * Correct approach: Check if shifting would ACTUALLY cause wraparound by comparing
+   * before and after the shift. If denom becomes smaller after shift, we've wrapped.
+   */
+  struct bn prev_denom;
   bool overflow = false;
+
   while (bignum_cmp(&denom, a) != LARGER)     // while (denom <= a) {
   {
-    if (denom.array[BN_ARRAY_SIZE - 1] >= half_max)
+    /* Save current value before shifting */
+    bignum_assign(&prev_denom, &denom);
+
+    _lshift_one_bit(&current);                //   current <<= 1;
+    _lshift_one_bit(&denom);                  //   denom <<= 1;
+
+    /* Check if shift caused wraparound (denom became smaller) */
+    if (bignum_cmp(&denom, &prev_denom) == SMALLER)
     {
+      /* Undo the shift */
+      bignum_assign(&denom, &prev_denom);
+      _rshift_one_bit(&current);
       overflow = true;
       break;
     }
-    _lshift_one_bit(&current);                //   current <<= 1;
-    _lshift_one_bit(&denom);                  //   denom <<= 1;
   }
+
   if (!overflow)
   {
     _rshift_one_bit(&denom);                  // denom >>= 1;

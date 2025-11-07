@@ -184,3 +184,108 @@ tiny-bignum-c cannot be used for RSA-2048 without fixing the overflow detection 
 ##  Recommended Solution
 
 Use **BearSSL's bignum implementation** for RSA-2048 operations.
+
+---
+
+## FINAL UPDATE: tiny-bignum-c Fundamentally Incompatible with RSA-2048
+
+After attempting Option C (fix the overflow check), discovered **THREE FATAL FLAWS**:
+
+### Flaw 1: Overflow Detection (ATTEMPTED FIX)
+
+**Location**: bn_tinybignum.c:295  
+**Issue**: Check `(denom.array[BN_ARRAY_SIZE-1] >= 0x80000000)` triggers prematurely  
+**Attempted fix**: Detect actual wraparound by comparing before/after shift  
+**Result**: Fixed (n+1) mod n, but exposed Flaw 2
+
+### Flaw 2: Addition Wraparound
+
+**Test**: `(2*n) mod n` should equal 0  
+**Issue**: RSA modulus n uses full 2048 bits (MSB set)  
+**Result**: 2*n requires 2049 bits, but bignum only holds 2048 bits  
+**Impact**: `(n + n)` wraps around, producing value < n
+
+**Evidence** (`test_high_words.c`):
+```
+n.array[63]     = 0x979d3ea7
+(2*n).array[63] = 0x2f3a7d4e  ← SMALLER! Wraparound occurred
+bignum_cmp(2*n, n) = SMALLER  ← Impossible if no wraparound!
+```
+
+### Flaw 3: Multiplication Wraparound ⚠️ **CRITICAL FOR RSA**
+
+**Location**: bn_tinybignum.c:263
+```c
+if (i + j < BN_ARRAY_SIZE)  // Discards terms where i+j >= BN_ARRAY_SIZE!
+```
+
+**Issue**: Multiplying two values near n produces result near n², requiring ~4096 bits.  
+But `bignum_mul` only keeps low 2048 bits!
+
+**Evidence** (`test_mul_wraparound.c`):
+```
+Test: (n-1) × (n-1)
+Expected: ≈ n² (larger than n)
+Result: product < n  ← WRAPAROUND!
+```
+
+**Impact**: **RSA modular exponentiation computes (a × b) mod n where a,b ≈ n.**  
+If multiplication wraps, the entire RSA operation produces wrong results!
+
+### Why This Matters
+
+For RSA signature: `sig = (padded_hash)^d mod n`
+
+During modexp:
+1. Start: result = 1, base = padded_hash
+2. Bit 0 of d is 1: result = (1 × base) mod n = base
+3. Square base: base = (base × base) mod n
+   - If base ≈ n, then base² ≈ n² (4096 bits)
+   - **tiny-bignum-c wraps**: keeps only low 2048 bits  
+   - Mod operation gets WRONG input
+   - Result diverges from correct value
+4. Process continues with wrong intermediate values
+5. Final signature is completely wrong
+
+### Test Summary
+
+Created 19 test programs total:
+
+**✓ Working**:
+- Small number operations (42^7 mod 100 = 48)
+- Byte order conversion
+- Key loading
+- (n-1) mod n
+- (n+1) mod n (after overflow fix)
+
+**✗ Failing**:
+- (2*n) mod n - addition wraparound
+- (n-1) × (n-1) - multiplication wraparound  
+- 42^65537 mod n - cascading errors from multiplication wraparound
+
+## Final Verdict
+
+tiny-bignum-c **CANNOT** be used for RSA-2048 because:
+
+1. **Design limitation**: Built for numbers ≤ N bits, not modular arithmetic on N-bit modulus
+2. **No double-width multiplication**: RSA needs 2N-bit intermediate results
+3. **Fundamental architectural issue**: Cannot be fixed without complete rewrite
+
+### Path Forward
+
+**Must use library designed for RSA/modular arithmetic:**
+
+- **BearSSL** ⭐ - Minimal, proven, designed for embedded systems
+- **LibTomMath** - Public domain, extensively tested for RSA
+- **mbedTLS bignum** - Larger but battle-tested
+
+All three properly handle double-width multiplication and modular reduction.
+
+---
+
+**Test files demonstrating each flaw:**
+- `test_overflow_check.c` - Flaw 1: Premature overflow detection
+- `test_high_words.c` - Flaw 2: Addition wraparound  
+- `test_mul_wraparound.c` - Flaw 3: Multiplication wraparound (CRITICAL)
+
+**Conclusion**: 40+ hours of debugging reveals tiny-bignum-c is architecturally incompatible with RSA-2048. **Recommendation: Use BearSSL.**
