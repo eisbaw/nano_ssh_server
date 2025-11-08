@@ -186,6 +186,54 @@ clean-musl:
     @rm -rf build-musl test_musl test_glibc
     @echo "Cleaned musl build artifacts"
 
+# Build v14-static with musl (requires musl-tools and static libsodium)
+build-v14-static:
+    @echo "Building v14-static with musl libc..."
+    @echo "This requires musl-tools and statically compiled libsodium"
+    @echo ""
+    @if [ ! -d "v14-static" ]; then \
+        echo "Error: v14-static directory does not exist"; \
+        exit 1; \
+    fi
+    @cd v14-static && make
+    @echo ""
+    @echo "✅ v14-static built successfully!"
+    @echo ""
+    @ls -lh v14-static/nano_ssh_server
+    @echo ""
+
+# Run v14-static
+run-v14-static:
+    @echo "Starting v14-static on port 2222..."
+    @if [ ! -f "v14-static/nano_ssh_server" ]; then \
+        echo "Error: v14-static/nano_ssh_server not found. Run 'just build-v14-static' first"; \
+        exit 1; \
+    fi
+    @cd v14-static && ./nano_ssh_server
+
+# Test v14-static with real SSH client
+test-v14-static:
+    @echo "Testing v14-static with real SSH client..."
+    @if [ ! -f "v14-static/nano_ssh_server" ]; then \
+        echo "Error: v14-static/nano_ssh_server not found. Run 'just build-v14-static' first"; \
+        exit 1; \
+    fi
+    @echo ""
+    @echo "Starting v14-static server in background..."
+    @cd v14-static && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
+    @sleep 2
+    @echo ""
+    @echo "Testing SSH connection..."
+    @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost "echo 'Connection successful!'" || true
+    @echo ""
+    @echo "Stopping server..."
+    @kill $$(cat v14-static/server.pid) 2>/dev/null || true
+    @rm -f v14-static/server.pid
+    @echo ""
+    @echo "Server output:"
+    @cat v14-static/server_test.log
+    @echo ""
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
