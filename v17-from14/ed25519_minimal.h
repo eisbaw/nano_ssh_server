@@ -116,78 +116,27 @@ static void ge_p3_to_cached(ge_cached *r, const ge_p3 *p) {
     fe_mul(r->T2d, p->T, d2);
 }
 
-/* Scalar multiplication: r = a*B where B is base point */
+/* Scalar multiplication: r = a*B where B is base point
+ * Simple double-and-add implementation - not constant-time but correct */
 static void ge_scalarmult_base(ge_p3 *h, const uint8_t a[32]) {
-    signed char e[64];
-    int i, carry;
-
-    for (i = 0; i < 32; i++) {
-        e[2*i+0] = (a[i] >> 0) & 15;
-        e[2*i+1] = (a[i] >> 4) & 15;
-    }
-    carry = 0;
-    for (i = 0; i < 63; i++) {
-        e[i] += carry;
-        carry = e[i] + 8;
-        carry >>= 4;
-        e[i] -= carry << 4;
-    }
-    e[63] += carry;
-
-    ge_p3_0(h);
+    int i;
     ge_p1p1 r;
-    ge_p3 t;
-    ge_precomp pi;
+    ge_cached c;
 
-    for (i = 1; i < 64; i += 2) {
+    /* Start with identity/zero point */
+    ge_p3_0(h);
+
+    /* Double-and-add from MSB to LSB */
+    for (i = 255; i >= 0; i--) {
+        unsigned int bit = (a[i / 8] >> (i & 7)) & 1;
+
+        /* Double: h = 2*h */
         ge_p3_dbl(&r, h);
-        ge_p1p1_to_p2((ge_p2*)&t, &r);
-        ge_p2_dbl(&r, (ge_p2*)&t);
-        ge_p1p1_to_p2((ge_p2*)&t, &r);
-        ge_p2_dbl(&r, (ge_p2*)&t);
-        ge_p1p1_to_p2((ge_p2*)&t, &r);
-        ge_p2_dbl(&r, (ge_p2*)&t);
         ge_p1p1_to_p3(h, &r);
 
-        if (e[i] > 0) {
-            /* Precomputed table would go here. For simplicity, compute on-the-fly */
-            ge_p3 base_multiple;
-            fe_copy(base_multiple.X, ge_base.X);
-            fe_copy(base_multiple.Y, ge_base.Y);
-            fe_copy(base_multiple.Z, ge_base.Z);
-            fe_copy(base_multiple.T, ge_base.T);
-
-            int j;
-            for (j = 1; j < e[i]; j++) {
-                ge_cached c;
-                ge_p3_to_cached(&c, &ge_base);
-                ge_add(&r, &base_multiple, &c);
-                ge_p1p1_to_p3(&base_multiple, &r);
-            }
-
-            ge_p3_to_cached((ge_cached*)&pi, &base_multiple);
-            ge_add(&r, h, (ge_cached*)&pi);
-            ge_p1p1_to_p3(h, &r);
-        } else if (e[i] < 0) {
-            ge_p3 base_multiple;
-            fe_copy(base_multiple.X, ge_base.X);
-            fe_copy(base_multiple.Y, ge_base.Y);
-            fe_copy(base_multiple.Z, ge_base.Z);
-            fe_copy(base_multiple.T, ge_base.T);
-
-            int j;
-            for (j = 1; j < -e[i]; j++) {
-                ge_cached c;
-                ge_p3_to_cached(&c, &ge_base);
-                ge_add(&r, &base_multiple, &c);
-                ge_p1p1_to_p3(&base_multiple, &r);
-            }
-
-            ge_cached c;
-            ge_p3_to_cached(&c, &base_multiple);
-            fe_neg(c.YplusX, c.YminusX);
-            fe_copy(c.YminusX, c.YplusX);
-            fe_neg(c.T2d, c.T2d);
+        /* Add base point if bit is set: h = h + B */
+        if (bit) {
+            ge_p3_to_cached(&c, &ge_base);
             ge_add(&r, h, &c);
             ge_p1p1_to_p3(h, &r);
         }
