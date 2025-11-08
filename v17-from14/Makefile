@@ -14,6 +14,8 @@ CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
          -D_POSIX_C_SOURCE=200809L
 LDFLAGS = -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr
+# Temporarily add libsodium for diagnostic comparison
+LDFLAGS += -lsodium
 
 SRCS = main.c f25519.c fprime.c ed25519.c edsign.c sha512.c
 OBJS = $(SRCS:.c=.o)

@@ -17,11 +17,19 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdint.h>
 #include "random_minimal.h"
 #include "curve25519_minimal.h"
 #include "edsign.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
+
+/* TEMPORARY: External declarations of libsodium functions for diagnostic */
+extern int crypto_scalarmult(unsigned char *q, const unsigned char *n, const unsigned char *p);
+extern int crypto_sign_ed25519_detached(unsigned char *sig, unsigned long long *siglen_p,
+                                         const unsigned char *m, unsigned long long mlen,
+                                         const unsigned char *sk);
+extern int crypto_sign_ed25519_sk_to_pk(unsigned char *pk, const unsigned char *sk);
 
 /* Forward declarations */
 ssize_t send_data(int fd, const void *buf, size_t len);
@@ -1072,9 +1080,27 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         return;
     }
 
-    fprintf(stderr, "Shared secret K (raw from X25519): ");
+    fprintf(stderr, "Shared secret K (custom curve25519): ");
     for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", shared_secret[i]);
     fprintf(stderr, "\n");
+
+    /* DIAGNOSTIC: Compare with libsodium's crypto_scalarmult */
+    uint8_t shared_secret_libsodium[32];
+    crypto_scalarmult(shared_secret_libsodium, server_ephemeral_private, client_ephemeral_public);
+    fprintf(stderr, "Shared secret K (libsodium):        ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", shared_secret_libsodium[i]);
+    fprintf(stderr, "\n");
+
+    int mismatch_count = 0;
+    for (int i = 0; i < 32; i++) {
+        if (shared_secret[i] != shared_secret_libsodium[i]) mismatch_count++;
+    }
+    fprintf(stderr, "DIAGNOSTIC: %s (%d bytes differ)\n",
+            mismatch_count == 0 ? "MATCH" : "MISMATCH", mismatch_count);
+
+    /* Use libsodium's result for now to verify the rest works */
+    memcpy(shared_secret, shared_secret_libsodium, 32);
+    fprintf(stderr, "DIAGNOSTIC: Using libsodium shared secret for testing\n");
 
     /* RFC 8731 Section 3.1: Use X25519 output as-is, no byte reversal */
 
@@ -1106,17 +1132,39 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
 
-    /* Sign exchange hash with host private key */
+    /* Sign exchange hash with host private key (c25519) */
     edsign_sign(signature, host_public_key, host_private_key, exchange_hash, 32);
     sig_len = 64;  /* Ed25519 signatures are always 64 bytes */
 
-    fprintf(stderr, "Signature: ");
+    fprintf(stderr, "Signature (c25519): ");
     for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature[i]);
     fprintf(stderr, "\n");
 
+    /* DIAGNOSTIC: Compare with libsodium's Ed25519 signature */
+    uint8_t host_private_key_64[64];  /* libsodium uses 64-byte private keys */
+    memcpy(host_private_key_64, host_private_key, 32);  /* First 32 bytes = seed */
+    memcpy(host_private_key_64 + 32, host_public_key, 32);  /* Last 32 bytes = public key */
+    uint8_t signature_libsodium[64];
+    unsigned long long sig_len_libsodium;
+    crypto_sign_ed25519_detached(signature_libsodium, &sig_len_libsodium, exchange_hash, 32, host_private_key_64);
+    fprintf(stderr, "Signature (libsodium): ");
+    for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature_libsodium[i]);
+    fprintf(stderr, "\n");
+
+    int sig_mismatch = 0;
+    for (int i = 0; i < 64; i++) {
+        if (signature[i] != signature_libsodium[i]) sig_mismatch++;
+    }
+    fprintf(stderr, "DIAGNOSTIC: Signatures %s (%d bytes differ)\n",
+            sig_mismatch == 0 ? "MATCH" : "MISMATCH", sig_mismatch);
+
+    /* Use libsodium's signature for testing */
+    memcpy(signature, signature_libsodium, 64);
+    fprintf(stderr, "DIAGNOSTIC: Using libsodium Ed25519 signature for testing\n");
+
     /* Verify our own signature */
-    uint8_t verify_result = edsign_verify(signature, host_public_key, exchange_hash, 32);
-    fprintf(stderr, "Self-verification: %s\n", verify_result ? "PASS" : "FAIL");
+    uint8_t verify_result = edsign_verify(signature_libsodium, host_public_key, exchange_hash, 32);
+    fprintf(stderr, "Self-verification (c25519 verifying libsodium sig): %s\n", verify_result ? "PASS" : "FAIL");
     fprintf(stderr, "=================================\n\n");
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
