@@ -1795,6 +1795,15 @@ int main(int argc, char *argv[]) {
     
     /* Generate Ed25519 host key pair */
     crypto_sign_keypair(host_public_key, host_private_key);
+
+    fprintf(stderr, "\n=== HOST KEY GENERATED ===\n");
+    fprintf(stderr, "Public key (32 bytes): ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_public_key[i]);
+    fprintf(stderr, "\nPrivate key [0:32]: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_private_key[i]);
+    fprintf(stderr, "\nPrivate key [32:64]: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_private_key[32+i]);
+    fprintf(stderr, "\n========================\n\n");
     
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);
