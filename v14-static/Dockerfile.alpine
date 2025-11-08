@@ -1,0 +1,77 @@
+# Multi-stage build for v14-static with musl libc
+# v14-crypto with custom AES-128-CTR, SHA-256, HMAC-SHA256
+# Only needs libsodium (no OpenSSL!)
+FROM alpine:3.19 AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    make \
+    libsodium-dev \
+    libsodium-static \
+    linux-headers \
+    upx
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY main.c aes128_minimal.h sha256_minimal.h ./
+
+# Build with aggressive optimization
+RUN gcc -o nano_ssh_server main.c \
+    -static \
+    -std=c11 \
+    -Os \
+    -flto \
+    -ffunction-sections \
+    -fdata-sections \
+    -fno-unwind-tables \
+    -fno-asynchronous-unwind-tables \
+    -fno-stack-protector \
+    -fmerge-all-constants \
+    -fno-ident \
+    -finline-small-functions \
+    -fshort-enums \
+    -fomit-frame-pointer \
+    -ffast-math \
+    -fno-math-errno \
+    -fvisibility=hidden \
+    -fno-builtin \
+    -fno-plt \
+    -fwhole-program \
+    -fipa-pta \
+    -fno-common \
+    -D_POSIX_C_SOURCE=200809L \
+    -lsodium \
+    -Wl,--gc-sections \
+    -Wl,--strip-all \
+    -Wl,--as-needed \
+    -Wl,--hash-style=gnu \
+    -Wl,--build-id=none \
+    -Wl,-z,norelro \
+    -Wl,--no-eh-frame-hdr
+
+# Additional stripping
+RUN strip --strip-all \
+          --remove-section=.note \
+          --remove-section=.comment \
+          nano_ssh_server 2>/dev/null || true
+
+# Show build info
+RUN echo "=== Build Complete ===" && \
+    ls -lh nano_ssh_server && \
+    file nano_ssh_server && \
+    ldd nano_ssh_server 2>&1 || echo "(statically linked)" && \
+    size nano_ssh_server
+
+# Optional: Compress with UPX
+RUN cp nano_ssh_server nano_ssh_server.upx && \
+    upx --best --ultra-brute nano_ssh_server.upx 2>&1 || true && \
+    ls -lh nano_ssh_server*
+
+# Final minimal image
+FROM scratch
+COPY --from=builder /build/nano_ssh_server /nano_ssh_server
+CMD ["/nano_ssh_server"]
