@@ -30,6 +30,7 @@ extern int crypto_sign_ed25519_detached(unsigned char *sig, unsigned long long *
                                          const unsigned char *m, unsigned long long mlen,
                                          const unsigned char *sk);
 extern int crypto_sign_ed25519_sk_to_pk(unsigned char *pk, const unsigned char *sk);
+extern int crypto_sign_keypair(unsigned char *pk, unsigned char *sk);
 
 /* Forward declarations */
 ssize_t send_data(int fd, const void *buf, size_t len);
@@ -1132,40 +1133,12 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
 
-    /* Sign exchange hash with host private key (c25519) */
-    edsign_sign(signature, host_public_key, host_private_key, exchange_hash, 32);
-    sig_len = 64;  /* Ed25519 signatures are always 64 bytes */
+    /* Sign exchange hash with host private key (using libsodium) */
+    crypto_sign_ed25519_detached(signature, &sig_len, exchange_hash, 32, host_private_key);
 
-    fprintf(stderr, "Signature (c25519): ");
-    for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature[i]);
-    fprintf(stderr, "\n");
-
-    /* DIAGNOSTIC: Compare with libsodium's Ed25519 signature */
-    uint8_t host_private_key_64[64];  /* libsodium uses 64-byte private keys */
-    memcpy(host_private_key_64, host_private_key, 32);  /* First 32 bytes = seed */
-    memcpy(host_private_key_64 + 32, host_public_key, 32);  /* Last 32 bytes = public key */
-    uint8_t signature_libsodium[64];
-    unsigned long long sig_len_libsodium;
-    crypto_sign_ed25519_detached(signature_libsodium, &sig_len_libsodium, exchange_hash, 32, host_private_key_64);
     fprintf(stderr, "Signature (libsodium): ");
-    for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature_libsodium[i]);
-    fprintf(stderr, "\n");
-
-    int sig_mismatch = 0;
-    for (int i = 0; i < 64; i++) {
-        if (signature[i] != signature_libsodium[i]) sig_mismatch++;
-    }
-    fprintf(stderr, "DIAGNOSTIC: Signatures %s (%d bytes differ)\n",
-            sig_mismatch == 0 ? "MATCH" : "MISMATCH", sig_mismatch);
-
-    /* Use libsodium's signature for testing */
-    memcpy(signature, signature_libsodium, 64);
-    fprintf(stderr, "DIAGNOSTIC: Using libsodium Ed25519 signature for testing\n");
-
-    /* Verify our own signature */
-    uint8_t verify_result = edsign_verify(signature_libsodium, host_public_key, exchange_hash, 32);
-    fprintf(stderr, "Self-verification (c25519 verifying libsodium sig): %s\n", verify_result ? "PASS" : "FAIL");
-    fprintf(stderr, "=================================\n\n");
+    for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature[i]);
+    fprintf(stderr, "\n=================================\n\n");
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     kex_reply_len = 0;
@@ -1194,6 +1167,15 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     /* Send SSH_MSG_KEX_ECDH_REPLY */
+    fprintf(stderr, "\n=== SENDING KEX_ECDH_REPLY ===\n");
+    fprintf(stderr, "Payload length: %zu bytes\n", kex_reply_len);
+    fprintf(stderr, "First 100 bytes of payload:\n");
+    for (size_t i = 0; i < kex_reply_len && i < 100; i++) {
+        fprintf(stderr, "%02x", kex_reply[i]);
+        if ((i + 1) % 32 == 0) fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "\n==============================\n\n");
+
     if (send_packet(client_fd, kex_reply, kex_reply_len) < 0) {
         close(client_fd);
         return;
@@ -1835,15 +1817,19 @@ int main(int argc, char *argv[]) {
     int client_fd;
     struct sockaddr_in client_addr;
     uint8_t host_public_key[32];
-    uint8_t host_private_key[32];  /* Ed25519 secret key (c25519 uses 32 bytes) */
+    uint8_t host_private_key_full[64];  /* Ed25519 secret key (libsodium uses 64 bytes) */
 
     (void)argc;
     (void)argv;
 
-    /* Generate Ed25519 host key pair */
-    randombytes_buf(host_private_key, 32);
-    edsign_sec_to_pub(host_public_key, host_private_key);
-    
+    /* DIAGNOSTIC: Use libsodium for EVERYTHING including key generation */
+    fprintf(stderr, "\n=== DIAGNOSTIC MODE ===\n");
+    fprintf(stderr, "Using libsodium for Ed25519 key generation\n");
+    crypto_sign_keypair(host_public_key, host_private_key_full);
+    fprintf(stderr, "Host public key: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_public_key[i]);
+    fprintf(stderr, "\n======================\n\n");
+
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);
     if (listen_fd < 0) {
@@ -1860,7 +1846,7 @@ int main(int argc, char *argv[]) {
         }
 
         /* Handle client connection */
-        handle_client(client_fd, &client_addr, host_public_key, host_private_key);
+        handle_client(client_fd, &client_addr, host_public_key, host_private_key_full);
 
         /* For now, only handle one connection then exit */
         /* TODO: In production, this should loop forever or handle multiple clients */

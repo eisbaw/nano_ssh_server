@@ -1125,6 +1125,15 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     /* Send SSH_MSG_KEX_ECDH_REPLY */
+    fprintf(stderr, "\n=== SENDING KEX_ECDH_REPLY ===\n");
+    fprintf(stderr, "Payload length: %zu bytes\n", kex_reply_len);
+    fprintf(stderr, "First 100 bytes of payload:\n");
+    for (size_t i = 0; i < kex_reply_len && i < 100; i++) {
+        fprintf(stderr, "%02x", kex_reply[i]);
+        if ((i + 1) % 32 == 0) fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "\n==============================\n\n");
+
     if (send_packet(client_fd, kex_reply, kex_reply_len) < 0) {
         close(client_fd);
         return;
