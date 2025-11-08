@@ -1068,6 +1068,17 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     
     /* Compute exchange hash H */
+    fprintf(stderr, "\n=== V14 EXCHANGE HASH INPUTS ===\n");
+    fprintf(stderr, "Host public key: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_public_key[i]);
+    fprintf(stderr, "\nI_C len: %zd (first 10 bytes): ", client_kexinit_len_s);
+    for (int i = 0; i < 10 && i < client_kexinit_len_s; i++) fprintf(stderr, "%02x", client_kexinit[i]);
+    fprintf(stderr, "\nI_S len: %zu (first 10 bytes): ", server_kexinit_len);
+    for (int i = 0; i < 10 && i < (int)server_kexinit_len; i++) fprintf(stderr, "%02x", server_kexinit[i]);
+    fprintf(stderr, "\nK_S len: %zu\nK_S content: ", host_key_blob_len);
+    for (int i = 0; i < (int)host_key_blob_len && i < 60; i++) fprintf(stderr, "%02x", host_key_blob[i]);
+    fprintf(stderr, "\n");
+
     compute_exchange_hash(exchange_hash,
                          client_version, SERVER_VERSION,
                          client_kexinit, client_kexinit_len_s,
@@ -1076,12 +1087,20 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
                          client_ephemeral_public, 32,
                          server_ephemeral_public, 32,
                          shared_secret, 32);
-    
+
+    fprintf(stderr, "Exchange hash H: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", exchange_hash[i]);
+    fprintf(stderr, "\n");
+
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
-    
+
     /* Sign exchange hash with host private key */
     crypto_sign_detached(signature, &sig_len, exchange_hash, 32, host_private_key);
+
+    fprintf(stderr, "Signature: ");
+    for (size_t i = 0; i < sig_len; i++) fprintf(stderr, "%02x", signature[i]);
+    fprintf(stderr, "\n=================================\n\n");
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     kex_reply_len = 0;

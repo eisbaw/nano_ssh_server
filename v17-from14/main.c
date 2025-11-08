@@ -1071,8 +1071,25 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         close(client_fd);
         return;
     }
-    
+
+    fprintf(stderr, "Shared secret K (raw from X25519): ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", shared_secret[i]);
+    fprintf(stderr, "\n");
+
+    /* RFC 8731 Section 3.1: Use X25519 output as-is, no byte reversal */
+
     /* Compute exchange hash H */
+    fprintf(stderr, "\n=== V17 EXCHANGE HASH INPUTS ===\n");
+    fprintf(stderr, "Host public key: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_public_key[i]);
+    fprintf(stderr, "\nI_C len: %zd (first 10 bytes): ", client_kexinit_len_s);
+    for (int i = 0; i < 10 && i < client_kexinit_len_s; i++) fprintf(stderr, "%02x", client_kexinit[i]);
+    fprintf(stderr, "\nI_S len: %zu (first 10 bytes): ", server_kexinit_len);
+    for (int i = 0; i < 10 && i < (int)server_kexinit_len; i++) fprintf(stderr, "%02x", server_kexinit[i]);
+    fprintf(stderr, "\nK_S len: %zu\nK_S content: ", host_key_blob_len);
+    for (int i = 0; i < (int)host_key_blob_len && i < 60; i++) fprintf(stderr, "%02x", host_key_blob[i]);
+    fprintf(stderr, "\n");
+
     compute_exchange_hash(exchange_hash,
                          client_version, SERVER_VERSION,
                          client_kexinit, client_kexinit_len_s,
@@ -1080,14 +1097,27 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
                          host_key_blob, host_key_blob_len,
                          client_ephemeral_public, 32,
                          server_ephemeral_public, 32,
-                         shared_secret, 32);
-    
+                         shared_secret, 32);  /* Use X25519 output as-is per RFC 8731 Section 3.1 */
+
+    fprintf(stderr, "Exchange hash H: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", exchange_hash[i]);
+    fprintf(stderr, "\n");
+
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
-    
+
     /* Sign exchange hash with host private key */
     edsign_sign(signature, host_public_key, host_private_key, exchange_hash, 32);
     sig_len = 64;  /* Ed25519 signatures are always 64 bytes */
+
+    fprintf(stderr, "Signature: ");
+    for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature[i]);
+    fprintf(stderr, "\n");
+
+    /* Verify our own signature */
+    uint8_t verify_result = edsign_verify(signature, host_public_key, exchange_hash, 32);
+    fprintf(stderr, "Self-verification: %s\n", verify_result ? "PASS" : "FAIL");
+    fprintf(stderr, "=================================\n\n");
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     kex_reply_len = 0;
@@ -1096,6 +1126,10 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* K_S - server host public key blob */
     kex_reply_len += write_string(kex_reply + kex_reply_len,
                                   (const char *)host_key_blob, host_key_blob_len);
+
+    fprintf(stderr, "Sending Q_S (server ephemeral): ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", server_ephemeral_public[i]);
+    fprintf(stderr, "\n");
 
     /* Q_S - server ephemeral public key */
     kex_reply_len += write_string(kex_reply + kex_reply_len,
