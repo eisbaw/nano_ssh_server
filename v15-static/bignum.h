@@ -131,17 +131,129 @@ static inline void bn_mul(bn_t *c, const bn_t *a, const bn_t *b) {
     memcpy(c, &result, sizeof(bn_t));
 }
 
-/* Modulo: r = a mod m (using division) */
-static inline void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
-    bn_t tmp;
-    memcpy(&tmp, a, sizeof(bn_t));
+/* Helper: Get bit length of bignum (position of highest set bit + 1) */
+static inline int bn_bitlen(const bn_t *n) {
+    int i;
 
-    /* Simple repeated subtraction (slow but small code) */
-    while (bn_cmp(&tmp, m) >= 0) {
-        bn_sub(&tmp, &tmp, m);
+    /* Find highest non-zero word */
+    for (i = BN_ARRAY_SIZE - 1; i >= 0; i--) {
+        if (n->array[i] != 0) break;
     }
 
-    memcpy(r, &tmp, sizeof(bn_t));
+    if (i < 0) return 0;  /* All zeros */
+
+    /* Find highest set bit in that word */
+    uint32_t word = n->array[i];
+    int bits = 0;
+    while (word) {
+        word >>= 1;
+        bits++;
+    }
+
+    return i * 32 + bits;
+}
+
+/* Helper: Left shift by N bits */
+static inline void bn_lshift_n(bn_t *r, const bn_t *a, int n) {
+    if (n == 0) {
+        memcpy(r, a, sizeof(bn_t));
+        return;
+    }
+
+    int word_shift = n / 32;
+    int bit_shift = n % 32;
+
+    bn_zero(r);
+
+    if (bit_shift == 0) {
+        /* Just word shift */
+        for (int i = word_shift; i < BN_ARRAY_SIZE; i++) {
+            r->array[i] = a->array[i - word_shift];
+        }
+    } else {
+        /* Word shift + bit shift */
+        for (int i = word_shift; i < BN_ARRAY_SIZE; i++) {
+            r->array[i] = a->array[i - word_shift] << bit_shift;
+            if (i - word_shift > 0) {
+                r->array[i] |= a->array[i - word_shift - 1] >> (32 - bit_shift);
+            }
+        }
+    }
+}
+
+/* Modulo: r = a mod m (using binary long division)
+ * Much faster than repeated subtraction for large numbers
+ */
+static inline void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
+    /* Handle trivial cases */
+    if (bn_cmp(a, m) < 0) {
+        memcpy(r, a, sizeof(bn_t));
+        return;
+    }
+
+    int a_bits = bn_bitlen(a);
+    int m_bits = bn_bitlen(m);
+
+    if (m_bits == 0) {
+        /* Division by zero - just return 0 */
+        bn_zero(r);
+        return;
+    }
+
+    /* remainder = a */
+    bn_t remainder;
+    memcpy(&remainder, a, sizeof(bn_t));
+
+    /* Binary long division */
+    int shift = a_bits - m_bits;
+    bn_t divisor;
+
+    while (shift >= 0) {
+        /* divisor = m << shift */
+        bn_lshift_n(&divisor, m, shift);
+
+        /* If remainder >= divisor, subtract */
+        if (bn_cmp(&remainder, &divisor) >= 0) {
+            bn_sub(&remainder, &remainder, &divisor);
+        }
+
+        shift--;
+    }
+
+    memcpy(r, &remainder, sizeof(bn_t));
+}
+
+/* Modular multiplication: r = (a * b) mod m
+ * Avoids overflow by using repeated doubling and addition
+ * This is slower than bn_mul + bn_mod but doesn't overflow
+ */
+static inline void bn_mulmod(bn_t *r, const bn_t *a, const bn_t *b, const bn_t *m) {
+    bn_t result, temp_a, temp_b, doubled;
+
+    bn_zero(&result);
+    bn_mod(&temp_a, a, m);  /* Reduce a first */
+    memcpy(&temp_b, b, sizeof(bn_t));
+
+    /* Binary multiplication with modular reduction
+     * result = sum of (a * 2^i) for each bit i set in b
+     */
+    while (!bn_is_zero(&temp_b)) {
+        /* If bit 0 of b is set, add a to result */
+        if (temp_b.array[0] & 1) {
+            bn_add(&result, &result, &temp_a);
+            /* Reduce using full mod (handles overflow correctly) */
+            bn_mod(&result, &result, m);
+        }
+
+        /* a = (a * 2) mod m */
+        bn_add(&doubled, &temp_a, &temp_a);  /* Double a */
+        bn_mod(&temp_a, &doubled, m);  /* Full mod to handle overflow */
+
+        /* b = b / 2 */
+        bn_rshift1(&temp_b);
+    }
+
+    memcpy(r, &result, sizeof(bn_t));
 }
 
 /* Modular exponentiation: result = base^exp mod modulus
@@ -150,7 +262,6 @@ static inline void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
  */
 static inline void bn_modexp(bn_t *result, const bn_t *base, const bn_t *exp, const bn_t *modulus) {
     bn_t base_copy, exp_copy;
-    bn_t temp;
 
     memcpy(&base_copy, base, sizeof(bn_t));
     memcpy(&exp_copy, exp, sizeof(bn_t));
@@ -166,16 +277,14 @@ static inline void bn_modexp(bn_t *result, const bn_t *base, const bn_t *exp, co
     while (!bn_is_zero(&exp_copy)) {
         /* If exp is odd, multiply result by base */
         if (exp_copy.array[0] & 1) {
-            bn_mul(&temp, result, &base_copy);
-            bn_mod(result, &temp, modulus);
+            bn_mulmod(result, result, &base_copy, modulus);
         }
 
         /* exp = exp / 2 */
         bn_rshift1(&exp_copy);
 
         /* base = base^2 mod modulus */
-        bn_mul(&temp, &base_copy, &base_copy);
-        bn_mod(&base_copy, &temp, modulus);
+        bn_mulmod(&base_copy, &base_copy, &base_copy, modulus);
     }
 }
 
