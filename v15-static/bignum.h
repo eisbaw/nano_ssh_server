@@ -20,6 +20,12 @@ typedef struct {
     uint32_t array[BN_ARRAY_SIZE];
 } bn_t;
 
+/* Static temporary variables to reduce stack usage
+ * Using static vars prevents stack overflow in deep recursion
+ * Trade-off: Not thread-safe, but we're single-threaded
+ */
+static bn_t bn_temp1, bn_temp2, bn_temp3, bn_temp4;
+
 /* Initialize bignum to zero */
 static inline void bn_zero(bn_t *n) {
     memset(n->array, 0, sizeof(n->array));
@@ -183,11 +189,14 @@ static inline void bn_lshift_n(bn_t *r, const bn_t *a, int n) {
 
 /* Modulo: r = a mod m (using binary long division)
  * Much faster than repeated subtraction for large numbers
+ * Uses static temps to reduce stack usage
  */
 static inline void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
     /* Handle trivial cases */
     if (bn_cmp(a, m) < 0) {
-        memcpy(r, a, sizeof(bn_t));
+        if (r != a) {  /* Avoid self-copy */
+            memcpy(r, a, sizeof(bn_t));
+        }
         return;
     }
 
@@ -200,38 +209,41 @@ static inline void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
         return;
     }
 
-    /* remainder = a */
-    bn_t remainder;
-    memcpy(&remainder, a, sizeof(bn_t));
+    /* Use static temps instead of stack allocation */
+    if (a != &bn_temp1) {  /* Avoid self-copy UB */
+        memcpy(&bn_temp1, a, sizeof(bn_t));  /* remainder = a */
+    }
 
     /* Binary long division */
     int shift = a_bits - m_bits;
-    bn_t divisor;
 
     while (shift >= 0) {
-        /* divisor = m << shift */
-        bn_lshift_n(&divisor, m, shift);
+        /* bn_temp2 = m << shift */
+        bn_lshift_n(&bn_temp2, m, shift);
 
         /* If remainder >= divisor, subtract */
-        if (bn_cmp(&remainder, &divisor) >= 0) {
-            bn_sub(&remainder, &remainder, &divisor);
+        if (bn_cmp(&bn_temp1, &bn_temp2) >= 0) {
+            bn_sub(&bn_temp1, &bn_temp1, &bn_temp2);
         }
 
         shift--;
     }
 
-    memcpy(r, &remainder, sizeof(bn_t));
+    if (r != &bn_temp1) {  /* Avoid self-copy UB */
+        memcpy(r, &bn_temp1, sizeof(bn_t));
+    }
 }
 
 /* Modular multiplication: r = (a * b) mod m
  * Avoids overflow by using repeated doubling and addition
- * This is slower than bn_mul + bn_mod but doesn't overflow
+ * Uses static temps to reduce stack usage
+ * Note: bn_temp3 for result, bn_temp4 for temp_a (bn_mod uses bn_temp1/2)
  */
 static inline void bn_mulmod(bn_t *r, const bn_t *a, const bn_t *b, const bn_t *m) {
-    bn_t result, temp_a, temp_b, doubled;
+    bn_t temp_b;  /* Only temp_b on stack (used for loop counter) */
 
-    bn_zero(&result);
-    bn_mod(&temp_a, a, m);  /* Reduce a first */
+    bn_zero(&bn_temp3);  /* result = 0 */
+    bn_mod(&bn_temp4, a, m);  /* temp_a = a mod m */
     memcpy(&temp_b, b, sizeof(bn_t));
 
     /* Binary multiplication with modular reduction
@@ -240,20 +252,20 @@ static inline void bn_mulmod(bn_t *r, const bn_t *a, const bn_t *b, const bn_t *
     while (!bn_is_zero(&temp_b)) {
         /* If bit 0 of b is set, add a to result */
         if (temp_b.array[0] & 1) {
-            bn_add(&result, &result, &temp_a);
+            bn_add(&bn_temp3, &bn_temp3, &bn_temp4);
             /* Reduce using full mod (handles overflow correctly) */
-            bn_mod(&result, &result, m);
+            bn_mod(&bn_temp3, &bn_temp3, m);
         }
 
-        /* a = (a * 2) mod m */
-        bn_add(&doubled, &temp_a, &temp_a);  /* Double a */
-        bn_mod(&temp_a, &doubled, m);  /* Full mod to handle overflow */
+        /* temp_a = (temp_a * 2) mod m */
+        bn_add(&bn_temp1, &bn_temp4, &bn_temp4);  /* doubled = temp_a + temp_a */
+        bn_mod(&bn_temp4, &bn_temp1, m);  /* temp_a = doubled mod m */
 
         /* b = b / 2 */
         bn_rshift1(&temp_b);
     }
 
-    memcpy(r, &result, sizeof(bn_t));
+    memcpy(r, &bn_temp3, sizeof(bn_t));
 }
 
 /* Modular exponentiation: result = base^exp mod modulus
