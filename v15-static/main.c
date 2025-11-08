@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -188,7 +189,8 @@ size_t read_string(const uint8_t *buf, size_t buf_len, char *out, size_t out_max
 
     *str_len = read_uint32_be(buf);
 
-    if (*str_len > out_max - 1) {
+    /* For binary data (mpint), we don't null-terminate, so check against out_max directly */
+    if (*str_len > out_max) {
         return 0;
     }
 
@@ -197,7 +199,7 @@ size_t read_string(const uint8_t *buf, size_t buf_len, char *out, size_t out_max
     }
 
     memcpy(out, buf + 4, *str_len);
-    out[*str_len] = '\0';  /* Null-terminate */
+    /* Note: Not null-terminating for binary data like mpint */
 
     return 4 + *str_len;
 }
@@ -1029,7 +1031,17 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     uint32_t client_eph_str_len;
 
     /* Generate server ephemeral key pair */
+    fprintf(stderr, "DEBUG: Generating server DH keypair...\n");
     generate_dh_keypair(server_ephemeral_private, server_ephemeral_public);
+
+    /* Check if public key is valid */
+    bn_t check_pub;
+    bn_from_bytes(&check_pub, server_ephemeral_public, 256);
+    int pub_bitlen = bn_bitlen(&check_pub);
+    fprintf(stderr, "DEBUG: Server public key generated, bitlength=%d\n", pub_bitlen);
+    if (bn_is_zero(&check_pub)) {
+        fprintf(stderr, "DEBUG: WARNING: Server public key is ZERO!\n");
+    }
     
     /* Use pre-built server host key blob (ssh-rsa format) */
     memcpy(host_key_blob, host_public_key_blob, host_public_key_len);
@@ -1043,36 +1055,57 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     if (kex_init_msg[0] != SSH_MSG_KEX_ECDH_INIT) {
+        fprintf(stderr, "DEBUG: Expected KEX_ECDH_INIT, got %d\n", kex_init_msg[0]);
         send_disconnect(client_fd, SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
                        "Expected KEX_ECDH_INIT message");
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: Received KEX_ECDH_INIT\n");
 
     /* Extract client ephemeral public key (Q_C) - DH Group14: mpint format */
     uint8_t client_eph_mpint[257];
     if (read_string(kex_init_msg + 1, kex_init_len - 1,
                    (char *)client_eph_mpint, 257, &client_eph_str_len) == 0) {
+        fprintf(stderr, "DEBUG: Failed to read client public key string\n");
+        close(client_fd);
+        return;
+    }
+    fprintf(stderr, "DEBUG: Client public key mpint length: %u bytes\n", client_eph_str_len);
+
+    /* mpint may have padding byte (0x00) if MSB is set. Skip it. */
+    const uint8_t *mpint_data = client_eph_mpint;
+    uint32_t mpint_len = client_eph_str_len;
+    if (mpint_len > 0 && mpint_data[0] == 0x00) {
+        mpint_data++;
+        mpint_len--;
+        fprintf(stderr, "DEBUG: Skipped mpint padding byte\n");
+    }
+    fprintf(stderr, "DEBUG: Client public key data length: %u bytes\n", mpint_len);
+
+    /* mpint should be at most 256 bytes after removing padding */
+    if (mpint_len > 256) {
+        fprintf(stderr, "DEBUG: Client public key too long after padding removal: %u bytes\n", mpint_len);
         close(client_fd);
         return;
     }
 
-    /* mpint may be shorter than 256 bytes (leading zeros stripped), pad to 256 bytes */
-    if (client_eph_str_len > 256) {
-        close(client_fd);
-        return;
-    }
+    /* Pad to 256 bytes with leading zeros */
     memset(client_ephemeral_public, 0, 256);
-    memcpy(client_ephemeral_public + (256 - client_eph_str_len), client_eph_mpint, client_eph_str_len);
-    
+    memcpy(client_ephemeral_public + (256 - mpint_len), mpint_data, mpint_len);
+
     /* Compute shared secret K */
+    fprintf(stderr, "DEBUG: Computing DH shared secret...\n");
     if (compute_dh_shared(shared_secret, server_ephemeral_private,
                                   client_ephemeral_public) != 0) {
+        fprintf(stderr, "DEBUG: DH shared secret computation failed!\n");
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: DH shared secret computed successfully\n");
     
     /* Compute exchange hash H */
+    fprintf(stderr, "DEBUG: Computing exchange hash...\n");
     compute_exchange_hash(exchange_hash,
                          client_version, SERVER_VERSION,
                          client_kexinit, client_kexinit_len_s,
@@ -1081,18 +1114,23 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
                          client_ephemeral_public, 256,
                          server_ephemeral_public, 256,
                          shared_secret, 256);
-    
+    fprintf(stderr, "DEBUG: Exchange hash computed\n");
+
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
-    
+
     /* Sign exchange hash with host private key */
+    fprintf(stderr, "DEBUG: Signing exchange hash with RSA...\n");
     if (rsa_sign(signature, exchange_hash, host_rsa_key) != 0) {
+        fprintf(stderr, "DEBUG: RSA signature failed!\n");
         close(client_fd);
         return;
     }
     sig_len = 256;  /* RSA-2048 signature is always 256 bytes */
+    fprintf(stderr, "DEBUG: RSA signature computed\n");
 
     /* Build SSH_MSG_KEX_ECDH_REPLY */
+    fprintf(stderr, "DEBUG: Building KEX_ECDH_REPLY packet...\n");
     kex_reply_len = 0;
     kex_reply[kex_reply_len++] = SSH_MSG_KEX_ECDH_REPLY;
 
@@ -1115,10 +1153,13 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     /* Send SSH_MSG_KEX_ECDH_REPLY */
+    fprintf(stderr, "DEBUG: Sending KEX_ECDH_REPLY (%zu bytes)...\n", kex_reply_len);
     if (send_packet(client_fd, kex_reply, kex_reply_len) < 0) {
+        fprintf(stderr, "DEBUG: Failed to send KEX_ECDH_REPLY!\n");
         close(client_fd);
         return;
     }
+    fprintf(stderr, "DEBUG: KEX_ECDH_REPLY sent successfully\n");
     
     /* ======================
      * Phase 1.7: Key Derivation
