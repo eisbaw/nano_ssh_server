@@ -82,7 +82,7 @@ test-all:
     fi
     @for dir in v*-*/; do \
         if [ -d "$$dir" ] && [ -f "$$dir/nano_ssh_server" ]; then \
-            version=$$(basename "$$dir"); \
+            version=$${dir%/}; \
             echo "Testing $$version..."; \
             bash tests/run_tests.sh "$$version"; \
         fi \
@@ -109,7 +109,7 @@ size-report:
     @echo "--------------------------------------"
     @for dir in v*-*/; do \
         if [ -f "$$dir/nano_ssh_server" ]; then \
-            version=$$(basename "$$dir"); \
+            version=$${dir%/}; \
             size=$$(stat -c%s "$$dir/nano_ssh_server" 2>/dev/null || stat -f%z "$$dir/nano_ssh_server" 2>/dev/null); \
             kb=$$(echo "scale=2; $$size/1024" | bc); \
             printf "%-20s %15s %15s\n" "$$version" "$$size" "$$kb"; \
@@ -133,7 +133,7 @@ status:
     @echo "Versions:"
     @for dir in v*-*/; do \
         if [ -d "$$dir" ]; then \
-            version=$$(basename "$$dir"); \
+            version=$${dir%/}; \
             if [ -f "$$dir/nano_ssh_server" ]; then \
                 printf "  [BUILT]  %s\n" "$$version"; \
             elif [ -f "$$dir/Makefile" ]; then \
