@@ -30,3 +30,8 @@ host_key.pub
 *.log
 test_output/
 build-musl/
+test_*.sh
+*_test.sh
+test_*
+bn_tiny.c
+bn_tiny.h

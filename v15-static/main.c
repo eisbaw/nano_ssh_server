@@ -89,7 +89,7 @@ ssize_t recv_data(int fd, void *buf, size_t len);
 
 /* Algorithm names for KEXINIT */
 #define KEX_ALGORITHM           "diffie-hellman-group14-sha256"
-#define HOST_KEY_ALGORITHM      "ssh-rsa"
+#define HOST_KEY_ALGORITHM      "rsa-sha2-256"
 #define ENCRYPTION_ALGORITHM    "aes128-ctr"      /* AES-128 in CTR mode */
 #define MAC_ALGORITHM           "hmac-sha2-256"   /* HMAC-SHA256 for packet authentication */
 #define COMPRESSION_ALGORITHM   "none"
@@ -714,12 +714,12 @@ void compute_exchange_hash(uint8_t *hash_out,
     hash_update(&h, buf, 4);
     hash_update(&h, server_host_key_blob, host_key_blob_len);
 
-    /* Q_C - client ephemeral public key */
-    len = write_string(buf, (const char *)client_ephemeral_pub, client_eph_len);
+    /* Q_C - client ephemeral public key (as mpint) */
+    len = write_mpint(buf, client_ephemeral_pub, client_eph_len);
     hash_update(&h, buf, len);
 
-    /* Q_S - server ephemeral public key */
-    len = write_string(buf, (const char *)server_ephemeral_pub, server_eph_len);
+    /* Q_S - server ephemeral public key (as mpint) */
+    len = write_mpint(buf, server_ephemeral_pub, server_eph_len);
     hash_update(&h, buf, len);
 
     /* K - shared secret (as mpint) */
@@ -1049,17 +1049,21 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         return;
     }
 
-    /* Extract client ephemeral public key (Q_C) */
+    /* Extract client ephemeral public key (Q_C) - DH Group14: mpint format */
+    uint8_t client_eph_mpint[257];
     if (read_string(kex_init_msg + 1, kex_init_len - 1,
-                   (char *)client_ephemeral_public, 33, &client_eph_str_len) == 0) {
+                   (char *)client_eph_mpint, 257, &client_eph_str_len) == 0) {
         close(client_fd);
         return;
     }
 
-    if (client_eph_str_len != 32) {
+    /* mpint may be shorter than 256 bytes (leading zeros stripped), pad to 256 bytes */
+    if (client_eph_str_len > 256) {
         close(client_fd);
         return;
     }
+    memset(client_ephemeral_public, 0, 256);
+    memcpy(client_ephemeral_public + (256 - client_eph_str_len), client_eph_mpint, client_eph_str_len);
     
     /* Compute shared secret K */
     if (compute_dh_shared(shared_secret, server_ephemeral_private,
@@ -1074,9 +1078,9 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
                          client_kexinit, client_kexinit_len_s,
                          server_kexinit, server_kexinit_len,
                          host_key_blob, host_key_blob_len,
-                         client_ephemeral_public, 32,
-                         server_ephemeral_public, 32,
-                         shared_secret, 32);
+                         client_ephemeral_public, 256,
+                         server_ephemeral_public, 256,
+                         shared_secret, 256);
     
     /* First exchange hash becomes session_id */
     memcpy(session_id, exchange_hash, 32);
@@ -1096,15 +1100,15 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     kex_reply_len += write_string(kex_reply + kex_reply_len,
                                   (const char *)host_key_blob, host_key_blob_len);
 
-    /* Q_S - server ephemeral public key - DH Group14: 2048-bit = 256 bytes */
-    kex_reply_len += write_string(kex_reply + kex_reply_len,
-                                  (const char *)server_ephemeral_public, 256);
+    /* Q_S - server ephemeral public key - DH Group14: 2048-bit = 256 bytes (as mpint) */
+    kex_reply_len += write_mpint(kex_reply + kex_reply_len,
+                                 server_ephemeral_public, 256);
 
-    /* Signature of H (ssh-rsa signature format) */
+    /* Signature of H (rsa-sha2-256 signature format) */
     {
         uint8_t sig_blob[512];  /* RSA signature is 256 bytes + overhead */
         size_t sig_blob_len = 0;
-        sig_blob_len += write_string(sig_blob, "ssh-rsa", 7);
+        sig_blob_len += write_string(sig_blob, "rsa-sha2-256", 12);
         sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 256);
         kex_reply_len += write_string(kex_reply + kex_reply_len,
                                       (const char *)sig_blob, sig_blob_len);
