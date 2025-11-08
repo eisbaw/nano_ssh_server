@@ -1161,7 +1161,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         uint8_t sig_blob[128];
         size_t sig_blob_len = 0;
         sig_blob_len += write_string(sig_blob, "ssh-ed25519", 11);
+        fprintf(stderr, "After algorithm name, sig_blob_len: %zu\n", sig_blob_len);
         sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 64);
+        fprintf(stderr, "After signature, sig_blob_len: %zu\n", sig_blob_len);
+        fprintf(stderr, "sig_blob content: ");
+        for (size_t i = 0; i < sig_blob_len && i < 100; i++) {
+            fprintf(stderr, "%02x", sig_blob[i]);
+        }
+        fprintf(stderr, "\n");
         kex_reply_len += write_string(kex_reply + kex_reply_len,
                                       (const char *)sig_blob, sig_blob_len);
     }
@@ -1821,6 +1828,14 @@ int main(int argc, char *argv[]) {
 
     (void)argc;
     (void)argv;
+
+    /* DIAGNOSTIC: Initialize libsodium */
+    extern int sodium_init(void);
+    if (sodium_init() < 0) {
+        fprintf(stderr, "ERROR: libsodium initialization failed\n");
+        return 1;
+    }
+    fprintf(stderr, "libsodium initialized successfully\n");
 
     /* DIAGNOSTIC: Use libsodium for EVERYTHING including key generation */
     fprintf(stderr, "\n=== DIAGNOSTIC MODE ===\n");
