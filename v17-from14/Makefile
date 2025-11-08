@@ -1,6 +1,7 @@
 # Makefile for v17-from14
 # 100% independent crypto implementation
-# Custom implementations: AES-128-CTR, SHA-256, SHA-512, HMAC-SHA256, Curve25519, Ed25519, CSPRNG
+# Custom: AES-128-CTR, SHA-256, HMAC-SHA256, Curve25519, CSPRNG
+# c25519 (public domain): Ed25519, SHA-512
 # NO libsodium dependency!
 # NO OpenSSL dependency!
 
@@ -14,7 +15,7 @@ CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
 LDFLAGS = -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr
 
-SRCS = main.c
+SRCS = main.c f25519.c fprime.c ed25519.c edsign.c sha512.c
 OBJS = $(SRCS:.c=.o)
 TARGET = nano_ssh_server
 TARGET_COMPRESSED = nano_ssh_server.upx

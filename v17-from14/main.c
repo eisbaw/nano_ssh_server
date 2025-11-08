@@ -9,6 +9,7 @@
  * - Custom CSPRNG using /dev/urandom (no libsodium)
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -18,7 +19,7 @@
 #include <arpa/inet.h>
 #include "random_minimal.h"
 #include "curve25519_minimal.h"
-#include "ed25519_minimal.h"
+#include "edsign.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
 
@@ -1085,7 +1086,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     memcpy(session_id, exchange_hash, 32);
     
     /* Sign exchange hash with host private key */
-    crypto_sign_detached(signature, &sig_len, exchange_hash, 32, host_private_key);
+    edsign_sign(signature, host_public_key, host_private_key, exchange_hash, 32);
+    sig_len = 64;  /* Ed25519 signatures are always 64 bytes */
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     kex_reply_len = 0;
@@ -1751,13 +1753,14 @@ int main(int argc, char *argv[]) {
     int client_fd;
     struct sockaddr_in client_addr;
     uint8_t host_public_key[32];
-    uint8_t host_private_key[64];
+    uint8_t host_private_key[32];  /* Ed25519 secret key (c25519 uses 32 bytes) */
 
     (void)argc;
     (void)argv;
 
-    /* Generate Ed25519 host key pair (no initialization needed) */
-    crypto_sign_keypair(host_public_key, host_private_key);
+    /* Generate Ed25519 host key pair */
+    randombytes_buf(host_private_key, 32);
+    edsign_sec_to_pub(host_public_key, host_private_key);
     
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);
