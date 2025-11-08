@@ -104,10 +104,10 @@ static inline void bn_lshift1(bn_t *n) {
 
 /* Right shift by one bit: n = n >> 1 */
 static inline void bn_rshift1(bn_t *n) {
-    for (int i = BN_ARRAY_SIZE - 1; i > 0; i--) {
-        n->array[i] = (n->array[i] >> 1) | (n->array[i - 1] << 31);
+    for (int i = 0; i < BN_ARRAY_SIZE - 1; i++) {
+        n->array[i] = (n->array[i] >> 1) | (n->array[i + 1] << 31);
     }
-    n->array[0] >>= 1;
+    n->array[BN_ARRAY_SIZE - 1] >>= 1;
 }
 
 /* Multiplication: c = a * b */
