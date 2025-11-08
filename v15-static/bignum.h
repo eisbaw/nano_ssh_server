@@ -75,8 +75,8 @@ static inline int bn_is_zero(const bn_t *n) {
     return 1;
 }
 
-/* Addition: c = a + b */
-static inline void bn_add(bn_t *c, const bn_t *a, const bn_t *b) {
+/* Addition: c = a + b, returns 1 if overflow (carry out) */
+static inline int bn_add(bn_t *c, const bn_t *a, const bn_t *b) {
     uint64_t carry = 0;
 
     for (int i = 0; i < BN_ARRAY_SIZE; i++) {
@@ -84,6 +84,8 @@ static inline void bn_add(bn_t *c, const bn_t *a, const bn_t *b) {
         c->array[i] = (uint32_t)sum;
         carry = sum >> 32;
     }
+
+    return (int)carry;
 }
 
 /* Subtraction: c = a - b (assumes a >= b) */
@@ -236,11 +238,25 @@ static inline void bn_mod(bn_t *r, const bn_t *a, const bn_t *m) {
 
 /* Modular multiplication: r = (a * b) mod m
  * Avoids overflow by using repeated doubling and addition
+ * Handles 2048-bit overflow correctly when temp_a * 2 >= 2^2048
  * Uses static temps to reduce stack usage
  * Note: bn_temp3 for result, bn_temp4 for temp_a (bn_mod uses bn_temp1/2)
  */
 static inline void bn_mulmod(bn_t *r, const bn_t *a, const bn_t *b, const bn_t *m) {
-    bn_t temp_b;  /* Only temp_b on stack (used for loop counter) */
+    bn_t temp_b, m_complement;  /* temp_b for loop counter, m_complement for overflow handling */
+    int overflow;
+
+    /* Compute m_complement = 2^2048 - m = ~m + 1 (for handling overflow) */
+    for (int i = 0; i < BN_ARRAY_SIZE; i++) {
+        m_complement.array[i] = ~m->array[i];
+    }
+    /* Add 1 using manual carry propagation */
+    uint64_t carry = 1;
+    for (int i = 0; i < BN_ARRAY_SIZE; i++) {
+        uint64_t sum = (uint64_t)m_complement.array[i] + carry;
+        m_complement.array[i] = (uint32_t)sum;
+        carry = sum >> 32;
+    }
 
     bn_zero(&bn_temp3);  /* result = 0 */
     bn_mod(&bn_temp4, a, m);  /* temp_a = a mod m */
@@ -252,14 +268,28 @@ static inline void bn_mulmod(bn_t *r, const bn_t *a, const bn_t *b, const bn_t *
     while (!bn_is_zero(&temp_b)) {
         /* If bit 0 of b is set, add a to result */
         if (temp_b.array[0] & 1) {
-            bn_add(&bn_temp3, &bn_temp3, &bn_temp4);
-            /* Reduce using full mod (handles overflow correctly) */
-            bn_mod(&bn_temp3, &bn_temp3, m);
+            overflow = bn_add(&bn_temp3, &bn_temp3, &bn_temp4);
+            if (overflow) {
+                /* result + temp_a overflowed, add m_complement to get correct mod */
+                bn_add(&bn_temp3, &bn_temp3, &m_complement);
+            }
+            /* Reduce if needed */
+            if (bn_cmp(&bn_temp3, m) >= 0) {
+                bn_sub(&bn_temp3, &bn_temp3, m);
+            }
         }
 
         /* temp_a = (temp_a * 2) mod m */
-        bn_add(&bn_temp1, &bn_temp4, &bn_temp4);  /* doubled = temp_a + temp_a */
-        bn_mod(&bn_temp4, &bn_temp1, m);  /* temp_a = doubled mod m */
+        overflow = bn_add(&bn_temp1, &bn_temp4, &bn_temp4);  /* bn_temp1 = temp_a * 2 */
+        if (overflow) {
+            /* temp_a * 2 overflowed 2048 bits, add m_complement to get correct mod */
+            bn_add(&bn_temp1, &bn_temp1, &m_complement);
+        }
+        /* Reduce if needed */
+        if (bn_cmp(&bn_temp1, m) >= 0) {
+            bn_sub(&bn_temp1, &bn_temp1, m);
+        }
+        memcpy(&bn_temp4, &bn_temp1, sizeof(bn_t));
 
         /* b = b / 2 */
         bn_rshift1(&temp_b);
