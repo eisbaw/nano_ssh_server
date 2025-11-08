@@ -117,28 +117,34 @@ static void ge_p3_to_cached(ge_cached *r, const ge_p3 *p) {
 }
 
 /* Scalar multiplication: r = a*B where B is base point
- * Simple double-and-add implementation - not constant-time but correct */
+ * LSB-first approach - simpler and avoids identity point edge cases */
 static void ge_scalarmult_base(ge_p3 *h, const uint8_t a[32]) {
-    int i;
     ge_p1p1 r;
     ge_cached c;
+    ge_p3 base_power;
+    int i;
 
-    /* Start with identity/zero point */
+    /* Start with identity */
     ge_p3_0(h);
 
-    /* Double-and-add from MSB to LSB */
-    for (i = 255; i >= 0; i--) {
-        unsigned int bit = (a[i / 8] >> (i & 7)) & 1;
+    /* Copy base point to base_power */
+    fe_copy(base_power.X, ge_base.X);
+    fe_copy(base_power.Y, ge_base.Y);
+    fe_copy(base_power.Z, ge_base.Z);
+    fe_copy(base_power.T, ge_base.T);
 
-        /* Double: h = 2*h */
-        ge_p3_dbl(&r, h);
-        ge_p1p1_to_p3(h, &r);
-
-        /* Add base point if bit is set: h = h + B */
-        if (bit) {
-            ge_p3_to_cached(&c, &ge_base);
+    /* LSB first: for each bit, if set, add current power of base */
+    for (i = 0; i < 256; i++) {
+        if ((a[i / 8] >> (i & 7)) & 1) {
+            ge_p3_to_cached(&c, &base_power);
             ge_add(&r, h, &c);
             ge_p1p1_to_p3(h, &r);
+        }
+
+        /* Double base_power for next bit (except on last iteration) */
+        if (i < 255) {
+            ge_p3_dbl(&r, &base_power);
+            ge_p1p1_to_p3(&base_power, &r);
         }
     }
 }
