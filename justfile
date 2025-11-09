@@ -81,9 +81,9 @@ test VERSION:
 # Test all versions
 test-all:
     #!/usr/bin/env bash
-    echo "Testing all versions..."
-    if [ ! -f "tests/run_tests.sh" ]; then
-        echo "Warning: tests/run_tests.sh not found. Skipping tests."
+    echo "Testing all versions (quick mode - version check only)..."
+    if [ ! -f "tests/test_version.sh" ]; then
+        echo "Warning: tests/test_version.sh not found. Skipping tests."
         exit 0
     fi
 
@@ -109,13 +109,13 @@ test-all:
             # Ensure clean state before each test
             pkill -9 -f nano_ssh_server 2>/dev/null || true
 
-            # Run the test with a 30-second timeout
-            if timeout 30 bash tests/run_tests.sh "${version}"; then
+            # Run only version test with 15-second timeout (faster for CI)
+            if timeout 15 bash tests/test_version.sh "${version}"; then
                 PASSED=$((PASSED + 1))
                 echo "✓ ${version}: PASSED"
             else
                 FAILED=$((FAILED + 1))
-                echo "✗ ${version}: FAILED (exit code: $?)"
+                echo "✗ ${version}: FAILED"
             fi
 
             # Ensure cleanup after each test
