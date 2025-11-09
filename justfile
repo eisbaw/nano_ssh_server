@@ -88,32 +88,53 @@ test-all:
     fi
 
     # Kill any existing servers before starting
-    pkill -f nano_ssh_server 2>/dev/null || true
-    sleep 2
+    pkill -9 -f nano_ssh_server 2>/dev/null || true
+    sleep 1
+
+    # Track test results
+    PASSED=0
+    FAILED=0
+    TOTAL=0
 
     for dir in v*-*/; do
         if [ -d "${dir}" ] && [ -f "${dir}/nano_ssh_server" ]; then
             version=${dir%/}
+            TOTAL=$((TOTAL + 1))
+
             echo ""
             echo "========================================"
-            echo "Testing ${version}..."
+            echo "Testing ${version}... ($TOTAL)"
             echo "========================================"
 
             # Ensure clean state before each test
-            pkill -f nano_ssh_server 2>/dev/null || true
-            sleep 1
+            pkill -9 -f nano_ssh_server 2>/dev/null || true
 
-            # Run the test
-            bash tests/run_tests.sh "${version}" || true
+            # Run the test with a 30-second timeout
+            if timeout 30 bash tests/run_tests.sh "${version}"; then
+                PASSED=$((PASSED + 1))
+                echo "✓ ${version}: PASSED"
+            else
+                FAILED=$((FAILED + 1))
+                echo "✗ ${version}: FAILED (exit code: $?)"
+            fi
 
             # Ensure cleanup after each test
-            pkill -f nano_ssh_server 2>/dev/null || true
-            sleep 1
+            pkill -9 -f nano_ssh_server 2>/dev/null || true
         fi
     done
 
     # Final cleanup
-    pkill -f nano_ssh_server 2>/dev/null || true
+    pkill -9 -f nano_ssh_server 2>/dev/null || true
+
+    # Print summary
+    echo ""
+    echo "========================================"
+    echo "Test Summary"
+    echo "========================================"
+    echo "Total:  ${TOTAL}"
+    echo "Passed: ${PASSED}"
+    echo "Failed: ${FAILED}"
+    echo "========================================"
 
 # Connect to running server with SSH client (run in separate terminal)
 connect:
