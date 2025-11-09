@@ -144,6 +144,71 @@ echo "v3-opt2: 45678 bytes (-12% from v2)" >> size_log.txt
 
 ---
 
+## Prerequisites: SSH Client Tools
+
+**MANDATORY: Install SSH and sshpass**
+
+Before you can develop on this project, you **MUST** have these tools installed:
+
+```bash
+# Check if already installed:
+which ssh
+which sshpass
+
+# If not installed:
+# On Ubuntu/Debian:
+sudo apt-get install openssh-client sshpass
+
+# On macOS (with Homebrew):
+brew install sshpass
+
+# On Fedora/RHEL:
+sudo dnf install openssh-clients sshpass
+```
+
+**Why These Are Required:**
+
+These tools are used for **real-life testing** of the SSH server implementation:
+
+1. **`ssh`** - The standard OpenSSH client
+   - Used to connect to your nano SSH server
+   - Validates that your implementation works with real-world SSH clients
+   - Not just unit tests - this is the REAL test
+
+2. **`sshpass`** - Non-interactive SSH password authentication
+   - Allows automated testing with password authentication
+   - Enables you to script the connection: `echo "password123" | sshpass ssh -p 2222 user@localhost`
+   - Critical for CI/CD and automated validation
+
+**What Success Looks Like:**
+
+When you run the SSH client against your server, you **MUST** see:
+
+```bash
+# Start your server:
+just run v0-vanilla
+
+# In another terminal, connect with SSH client:
+echo "password123" | sshpass ssh -p 2222 user@localhost
+
+# Expected output (printed by the SSH CLIENT):
+Hello World
+```
+
+**CRITICAL:** The message "Hello World" is sent FROM your nano SSH server TO the SSH client, and the SSH client prints it. This proves:
+- Your server accepts connections
+- Your server completes the SSH handshake
+- Your server authenticates the user
+- Your server opens a session channel
+- Your server sends data to the client
+- The client receives and displays the data
+
+**This is not optional.** If you cannot see "Hello World" printed by the SSH client, your implementation is incomplete.
+
+**Note:** While nix-shell provides most development dependencies, `ssh` and `sshpass` are typically system-level tools that should be installed on your host system, as they represent the real-world client environment your server must support.
+
+---
+
 ## Project Structure (READ-ONLY REFERENCE)
 
 ```
