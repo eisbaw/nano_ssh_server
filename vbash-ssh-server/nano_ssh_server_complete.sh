@@ -90,6 +90,14 @@ write_string() {
     printf "%s" "$1"
 }
 
+write_string_from_file() {
+    # Write SSH string from file (avoids null byte truncation)
+    local file="$1"
+    local len=$(wc -c < "$file")
+    write_uint32 "$len"
+    cat "$file"
+}
+
 write_mpint() {
     # Write SSH mpint (multi-precision integer)
     local data="$1"
@@ -108,14 +116,53 @@ write_mpint() {
     fi
 }
 
+write_mpint_from_file() {
+    # Write SSH mpint from file (avoids null byte truncation)
+    local file="$1"
+    local len=$(wc -c < "$file")
+
+    # Check if high bit is set (would be interpreted as negative)
+    local first_byte=$(head -c 1 "$file" | bin_to_hex)
+    if [ $((0x$first_byte)) -ge 128 ]; then
+        # Add leading zero byte
+        write_uint32 $((len + 1))
+        printf "\\x00"
+        cat "$file"
+    else
+        write_uint32 "$len"
+        cat "$file"
+    fi
+}
+
 read_uint32() {
     local bytes=$(read_bytes 4 | bin_to_hex)
     printf "%d" "0x$bytes"
 }
 
+read_uint32_to_file() {
+    # Read 4 bytes and write them to a file (avoids command substitution)
+    local output="$1"
+    dd bs=1 count=4 of="$output" 2>/dev/null
+}
+
 read_string() {
     local len=$(read_uint32)
     read_bytes "$len"
+}
+
+read_string_to_file() {
+    # Read SSH string directly to file (avoids null byte truncation)
+    local output="$1"
+
+    # Read length (4 bytes) to temp file
+    dd bs=1 count=4 of="$WORKDIR/tmp_len" 2>/dev/null
+
+    # Convert length to decimal
+    local len_hex=$(bin_to_hex < "$WORKDIR/tmp_len")
+    local len=$((0x$len_hex))
+
+    # Read the actual string data directly to output file
+    dd bs=1 count="$len" of="$output" 2>/dev/null
 }
 
 # === Cryptography Functions ===
@@ -178,28 +225,28 @@ compute_exchange_hash() {
     # H = SHA256(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K)
     {
         # V_C (client version string)
-        write_string "$(cat "$WORKDIR/client_version")"
+        write_string_from_file "$WORKDIR/client_version"
 
         # V_S (server version string)
         write_string "$SERVER_VERSION"
 
         # I_C (client KEXINIT payload)
-        write_string "$(cat "$WORKDIR/client_kexinit")"
+        write_string_from_file "$WORKDIR/client_kexinit"
 
         # I_S (server KEXINIT payload)
-        write_string "$(cat "$WORKDIR/server_kexinit")"
+        write_string_from_file "$WORKDIR/server_kexinit"
 
         # K_S (server host key blob)
-        write_string "$(cat "$WORKDIR/host_key_blob")"
+        write_string_from_file "$WORKDIR/host_key_blob"
 
         # Q_C (client ephemeral public key)
-        write_string "$(cat "$WORKDIR/client_x25519.pub")"
+        write_string_from_file "$WORKDIR/client_x25519.pub"
 
         # Q_S (server ephemeral public key)
-        write_string "$(cat "$WORKDIR/server_x25519.pub")"
+        write_string_from_file "$WORKDIR/server_x25519.pub"
 
         # K (shared secret as mpint)
-        write_mpint "$(cat "$WORKDIR/shared_secret")"
+        write_mpint_from_file "$WORKDIR/shared_secret"
 
     } | openssl dgst -sha256 -binary > "$WORKDIR/exchange_hash"
 
@@ -219,7 +266,7 @@ sign_exchange_hash() {
     # Build signature blob: string("ssh-ed25519") || string(signature)
     {
         write_string "ssh-ed25519"
-        write_string "$(cat "$WORKDIR/exchange_hash.sig")"
+        write_string_from_file "$WORKDIR/exchange_hash.sig"
     } > "$WORKDIR/signature_blob"
 
     log "Signature created: $(wc -c < "$WORKDIR/exchange_hash.sig") bytes"
@@ -352,12 +399,16 @@ read_packet_unencrypted() {
         return 1
     fi
 
-    local packet_data=$(read_bytes "$packet_len")
-    local padding_len=$(echo -n "$packet_data" | head -c 1 | bin_to_hex)
+    # Read packet data directly to temp file (avoids null byte truncation)
+    dd bs=1 count="$packet_len" of="$WORKDIR/packet_tmp" 2>/dev/null
+
+    # Read padding length from first byte
+    local padding_len=$(head -c 1 "$WORKDIR/packet_tmp" | bin_to_hex)
     padding_len=$((0x$padding_len))
 
+    # Extract payload (skip padding_length byte + skip padding at end)
     local payload_len=$((packet_len - 1 - padding_len))
-    echo -n "$packet_data" | tail -c +2 | head -c "$payload_len" > "$output_file"
+    tail -c +2 "$WORKDIR/packet_tmp" | head -c "$payload_len" > "$output_file"
 
     return 0
 }
@@ -492,9 +543,8 @@ handle_key_exchange() {
     fi
 
     # Extract client's X25519 public key (skip msg_type=1, then read string)
-    tail -c +2 "$WORKDIR/kex_init" | {
-        read_string > "$WORKDIR/client_x25519.pub"
-    }
+    # Use file-based read to avoid null byte truncation
+    tail -c +2 "$WORKDIR/kex_init" | read_string_to_file "$WORKDIR/client_x25519.pub"
 
     # Compute shared secret using Curve25519
     compute_shared_secret "$WORKDIR/client_x25519.pub"
@@ -502,7 +552,7 @@ handle_key_exchange() {
     # Build host key blob
     {
         write_string "ssh-ed25519"
-        write_string "$(cat "$WORKDIR/host_key.pub")"
+        write_string_from_file "$WORKDIR/host_key.pub"
     } > "$WORKDIR/host_key_blob"
 
     # Compute exchange hash H
@@ -515,9 +565,9 @@ handle_key_exchange() {
     log "Sending KEX_ECDH_REPLY with proper signature..."
     {
         write_uint8 $SSH_MSG_KEX_ECDH_REPLY
-        write_string "$(cat "$WORKDIR/host_key_blob")"
-        write_string "$(cat "$WORKDIR/server_x25519.pub")"
-        write_string "$(cat "$WORKDIR/signature_blob")"
+        write_string_from_file "$WORKDIR/host_key_blob"
+        write_string_from_file "$WORKDIR/server_x25519.pub"
+        write_string_from_file "$WORKDIR/signature_blob"
     } > "$WORKDIR/kex_reply_payload"
 
     send_packet "$WORKDIR/kex_reply_payload"
