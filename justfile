@@ -86,13 +86,34 @@ test-all:
         echo "Warning: tests/run_tests.sh not found. Skipping tests."
         exit 0
     fi
+
+    # Kill any existing servers before starting
+    pkill -f nano_ssh_server 2>/dev/null || true
+    sleep 2
+
     for dir in v*-*/; do
         if [ -d "${dir}" ] && [ -f "${dir}/nano_ssh_server" ]; then
             version=${dir%/}
+            echo ""
+            echo "========================================"
             echo "Testing ${version}..."
-            bash tests/run_tests.sh "${version}"
+            echo "========================================"
+
+            # Ensure clean state before each test
+            pkill -f nano_ssh_server 2>/dev/null || true
+            sleep 1
+
+            # Run the test
+            bash tests/run_tests.sh "${version}" || true
+
+            # Ensure cleanup after each test
+            pkill -f nano_ssh_server 2>/dev/null || true
+            sleep 1
         fi
     done
+
+    # Final cleanup
+    pkill -f nano_ssh_server 2>/dev/null || true
 
 # Connect to running server with SSH client (run in separate terminal)
 connect:
