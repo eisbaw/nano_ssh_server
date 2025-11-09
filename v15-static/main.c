@@ -716,9 +716,10 @@ void compute_exchange_hash(uint8_t *hash_out,
     hash_update(&h, buf, 4);
     hash_update(&h, server_host_key_blob, host_key_blob_len);
 
-    /* Q_C - client ephemeral public key (as mpint) */
-    len = write_mpint(buf, client_ephemeral_pub, client_eph_len);
-    hash_update(&h, buf, len);
+    /* Q_C - client ephemeral public key (as mpint) - use original from client! */
+    write_uint32_be(buf, client_eph_len);
+    hash_update(&h, buf, 4);
+    hash_update(&h, client_ephemeral_pub, client_eph_len);
 
     /* Q_S - server ephemeral public key (as mpint) */
     len = write_mpint(buf, server_ephemeral_pub, server_eph_len);
@@ -1016,7 +1017,8 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     uint8_t server_ephemeral_private[256];  /* DH Group14: 2048-bit */
     uint8_t server_ephemeral_public[256];   /* DH Group14: 2048-bit */
-    uint8_t client_ephemeral_public[256];   /* DH Group14: 2048-bit */
+    uint8_t client_ephemeral_public[257];   /* mpint can be 256+1 (with padding) */
+    uint8_t client_ephemeral_public_padded[256];  /* Padded for DH computation */
     uint8_t shared_secret[256];             /* DH Group14: 2048-bit */
     uint8_t exchange_hash[32];
     uint8_t session_id[32];
@@ -1029,6 +1031,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     uint8_t kex_init_msg[512];  /* Larger for DH Group14 keys */
     ssize_t kex_init_len;
     uint32_t client_eph_str_len;
+    uint32_t client_eph_actual_len;  /* Actual length without padding */
 
     /* Generate server ephemeral key pair */
     fprintf(stderr, "DEBUG: Generating server DH keypair...\n");
@@ -1046,7 +1049,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     /* Use pre-built server host key blob (ssh-rsa format) */
     memcpy(host_key_blob, host_public_key_blob, host_public_key_len);
     host_key_blob_len = host_public_key_len;
-    
+
+    /* Dump host key blob for verification */
+    FILE *fhk = fopen("/tmp/host_key_blob.bin", "wb");
+    if (fhk) {
+        fwrite(host_key_blob, 1, host_key_blob_len, fhk);
+        fclose(fhk);
+    }
+
     /* Receive SSH_MSG_KEX_ECDH_INIT from client */
     kex_init_len = recv_packet(client_fd, kex_init_msg, sizeof(kex_init_msg));
     if (kex_init_len <= 0) {
@@ -1073,31 +1083,34 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     fprintf(stderr, "DEBUG: Client public key mpint length: %u bytes\n", client_eph_str_len);
 
-    /* mpint may have padding byte (0x00) if MSB is set. Skip it. */
+    /* Keep ORIGINAL mpint data for exchange hash (don't strip padding!) */
+    memcpy(client_ephemeral_public, client_eph_mpint, client_eph_str_len);
+    client_eph_actual_len = client_eph_str_len;
+    fprintf(stderr, "DEBUG: Client public key mpint: %u bytes (keeping original)\n", client_eph_actual_len);
+
+    /* For DH computation, strip padding if present and pad to 256 bytes */
     const uint8_t *mpint_data = client_eph_mpint;
     uint32_t mpint_len = client_eph_str_len;
     if (mpint_len > 0 && mpint_data[0] == 0x00) {
         mpint_data++;
         mpint_len--;
-        fprintf(stderr, "DEBUG: Skipped mpint padding byte\n");
+        fprintf(stderr, "DEBUG: Stripped padding byte for DH computation\n");
     }
-    fprintf(stderr, "DEBUG: Client public key data length: %u bytes\n", mpint_len);
+    fprintf(stderr, "DEBUG: Client public key data for DH: %u bytes\n", mpint_len);
 
-    /* mpint should be at most 256 bytes after removing padding */
     if (mpint_len > 256) {
-        fprintf(stderr, "DEBUG: Client public key too long after padding removal: %u bytes\n", mpint_len);
+        fprintf(stderr, "DEBUG: Client public key too long: %u bytes\n", mpint_len);
         close(client_fd);
         return;
     }
 
-    /* Pad to 256 bytes with leading zeros */
-    memset(client_ephemeral_public, 0, 256);
-    memcpy(client_ephemeral_public + (256 - mpint_len), mpint_data, mpint_len);
+    memset(client_ephemeral_public_padded, 0, 256);
+    memcpy(client_ephemeral_public_padded + (256 - mpint_len), mpint_data, mpint_len);
 
-    /* Compute shared secret K */
+    /* Compute shared secret K using padded version */
     fprintf(stderr, "DEBUG: Computing DH shared secret...\n");
     if (compute_dh_shared(shared_secret, server_ephemeral_private,
-                                  client_ephemeral_public) != 0) {
+                                  client_ephemeral_public_padded) != 0) {
         fprintf(stderr, "DEBUG: DH shared secret computation failed!\n");
         close(client_fd);
         return;
@@ -1106,12 +1119,16 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     
     /* Compute exchange hash H */
     fprintf(stderr, "DEBUG: Computing exchange hash...\n");
+    fprintf(stderr, "DEBUG:   Q_C length: %u bytes (original from client)\n", client_eph_actual_len);
+    fprintf(stderr, "DEBUG:   Q_C first 4 bytes: %02x %02x %02x %02x\n",
+           client_ephemeral_public[0], client_ephemeral_public[1],
+           client_ephemeral_public[2], client_ephemeral_public[3]);
     compute_exchange_hash(exchange_hash,
                          client_version, SERVER_VERSION,
                          client_kexinit, client_kexinit_len_s,
                          server_kexinit, server_kexinit_len,
                          host_key_blob, host_key_blob_len,
-                         client_ephemeral_public, 256,
+                         client_ephemeral_public, client_eph_actual_len,
                          server_ephemeral_public, 256,
                          shared_secret, 256);
     fprintf(stderr, "DEBUG: Exchange hash computed\n");
@@ -1121,6 +1138,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* Sign exchange hash with host private key */
     fprintf(stderr, "DEBUG: Signing exchange hash with RSA...\n");
+
+    /* Dump exchange hash for verification */
+    FILE *f = fopen("/tmp/exchange_hash.bin", "wb");
+    if (f) {
+        fwrite(exchange_hash, 1, 32, f);
+        fclose(f);
+    }
+
     if (rsa_sign(signature, exchange_hash, host_rsa_key) != 0) {
         fprintf(stderr, "DEBUG: RSA signature failed!\n");
         close(client_fd);
@@ -1128,6 +1153,13 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
     sig_len = 256;  /* RSA-2048 signature is always 256 bytes */
     fprintf(stderr, "DEBUG: RSA signature computed\n");
+
+    /* Dump signature for verification */
+    f = fopen("/tmp/signature.bin", "wb");
+    if (f) {
+        fwrite(signature, 1, 256, f);
+        fclose(f);
+    }
 
     /* Build SSH_MSG_KEX_ECDH_REPLY */
     fprintf(stderr, "DEBUG: Building KEX_ECDH_REPLY packet...\n");
@@ -1147,7 +1179,15 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         uint8_t sig_blob[512];  /* RSA signature is 256 bytes + overhead */
         size_t sig_blob_len = 0;
         sig_blob_len += write_string(sig_blob, "rsa-sha2-256", 12);
-        sig_blob_len += write_mpint(sig_blob + sig_blob_len, signature, 256);
+        sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 256);
+
+        /* Dump sig_blob for analysis */
+        FILE *fsig = fopen("/tmp/sig_blob.bin", "wb");
+        if (fsig) {
+            fwrite(sig_blob, 1, sig_blob_len, fsig);
+            fclose(fsig);
+        }
+
         kex_reply_len += write_string(kex_reply + kex_reply_len,
                                       (const char *)sig_blob, sig_blob_len);
     }
