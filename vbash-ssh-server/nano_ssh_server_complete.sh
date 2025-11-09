@@ -285,8 +285,9 @@ derive_keys() {
         local output="$2"
 
         # Key = HASH(K || H || letter || session_id)
+        # Note: K must be encoded as mpint!
         {
-            cat "$K"
+            write_mpint_from_file "$K"
             cat "$H"
             printf "%s" "$letter"
             cat "$session_id"
@@ -361,9 +362,13 @@ send_packet_encrypted() {
     } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_S2C" -binary \
       > "$WORKDIR/packet_mac"
 
-    # Compute IV for this packet (CTR mode: IV is incremented)
-    # For simplicity, use sequence number as IV
-    local current_iv=$(printf "%032x" "$SEQ_NUM_S2C")
+    # Compute IV for this packet
+    # In SSH AES-CTR: IV stays the same, counter continues from previous packet
+    # For stateless implementation: combine derived IV with sequence number
+    # Take first 12 bytes of derived IV and append 4-byte sequence number
+    local iv_prefix=$(echo -n "$IV_S2C" | head -c 24)  # First 96 bits (24 hex chars)
+    local seq_hex=$(printf "%08x" "$SEQ_NUM_S2C")       # 32-bit sequence
+    local current_iv="${iv_prefix}${seq_hex}"
 
     # Encrypt packet with AES-128-CTR
     openssl enc -aes-128-ctr \
@@ -416,50 +421,73 @@ read_packet_unencrypted() {
 read_packet_encrypted() {
     local output_file="$1"
 
-    # Read first block (16 bytes) to get packet length
-    # In real SSH, first block is encrypted separately, but for simplicity we'll read all
-    local first_block=$(read_bytes 4)
+    # For encrypted packets, we need to read enough data to get the length
+    # Read a block of data (we'll read max size and handle it)
+    # First, read into a buffer - let's read 16 bytes (one AES block) to get length safely
+    dd bs=1 count=16 of="$WORKDIR/enc_block1" 2>/dev/null
 
-    # Decrypt just the length field
-    local current_iv=$(printf "%032x" "$SEQ_NUM_C2S")
-    echo -n "$first_block" | openssl enc -d -aes-128-ctr \
+    # Decrypt first block to get packet length
+    # Use same IV format as encryption: derived IV prefix + sequence number
+    local iv_prefix=$(echo -n "$IV_C2S" | head -c 24)  # First 96 bits
+    local seq_hex=$(printf "%08x" "$SEQ_NUM_C2S")       # 32-bit sequence
+    local current_iv="${iv_prefix}${seq_hex}"
+
+    openssl enc -d -aes-128-ctr \
         -K "$ENC_KEY_C2S" \
-        -iv "$current_iv" 2>/dev/null > "$WORKDIR/decrypted_len"
+        -iv "$current_iv" \
+        -in "$WORKDIR/enc_block1" \
+        -out "$WORKDIR/dec_block1" 2>/dev/null
 
-    local packet_len=$(cat "$WORKDIR/decrypted_len" | bin_to_hex)
-    packet_len=$((0x$packet_len))
+    # Extract packet length from first 4 bytes
+    local packet_len_hex=$(head -c 4 "$WORKDIR/dec_block1" | bin_to_hex)
+    packet_len=$((0x$packet_len_hex))
+
+    log "DEBUG: Encrypted packet - len_hex=$packet_len_hex len_dec=$packet_len"
 
     if [ "$packet_len" -eq 0 ] || [ "$packet_len" -gt 35000 ]; then
-        log "ERROR: Invalid encrypted packet length: $packet_len"
+        log "ERROR: Invalid encrypted packet length: $packet_len (hex: $packet_len_hex)"
+        log "DEBUG: First 16 bytes encrypted: $(od -An -tx1 < "$WORKDIR/enc_block1" | tr -d ' \n')"
+        log "DEBUG: First 16 bytes decrypted: $(od -An -tx1 < "$WORKDIR/dec_block1" | tr -d ' \n')"
+        log "DEBUG: ENC_KEY_C2S=$ENC_KEY_C2S"
+        log "DEBUG: SEQ_NUM_C2S=$SEQ_NUM_C2S"
         return 1
     fi
 
-    # Read rest of packet + MAC (32 bytes for HMAC-SHA256)
-    local rest_len=$((packet_len + 32))
-    local rest_data=$(read_bytes "$rest_len")
+    # Calculate how much more to read (packet_len + 4 bytes we already have in block1 - 16 bytes we read)
+    # Total packet size is 4 (length) + packet_len
+    # We already read 16 bytes, so we need to read: (4 + packet_len - 16) more bytes
+    local remaining=$((packet_len + 4 - 16))
+    if [ $remaining -gt 0 ]; then
+        dd bs=1 count=$remaining of="$WORKDIR/enc_rest" 2>/dev/null
+        cat "$WORKDIR/enc_block1" "$WORKDIR/enc_rest" > "$WORKDIR/enc_packet"
+    else
+        # Entire packet fit in first 16 bytes
+        head -c $((packet_len + 4)) "$WORKDIR/enc_block1" > "$WORKDIR/enc_packet"
+    fi
 
-    # Split packet and MAC
-    local encrypted_packet="${first_block}${rest_data:0:$packet_len}"
-    local received_mac="${rest_data:$packet_len:32}"
+    # Read MAC (32 bytes for HMAC-SHA256)
+    dd bs=1 count=32 of="$WORKDIR/received_mac" 2>/dev/null
 
     # Decrypt full packet
-    echo -n "$encrypted_packet" | openssl enc -d -aes-128-ctr \
+    openssl enc -d -aes-128-ctr \
         -K "$ENC_KEY_C2S" \
-        -iv "$current_iv" 2>/dev/null > "$WORKDIR/packet_decrypted"
+        -iv "$current_iv" \
+        -in "$WORKDIR/enc_packet" \
+        -out "$WORKDIR/packet_decrypted" 2>/dev/null
 
-    # Verify MAC
+    # Verify MAC over unencrypted packet
     {
         write_uint32 "$SEQ_NUM_C2S"
         cat "$WORKDIR/packet_decrypted"
     } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_C2S" -binary \
       > "$WORKDIR/computed_mac"
 
-    if ! cmp -s "$WORKDIR/computed_mac" <(echo -n "$received_mac"); then
+    if ! cmp -s "$WORKDIR/computed_mac" "$WORKDIR/received_mac"; then
         log "ERROR: MAC verification failed!"
         return 1
     fi
 
-    # Extract payload
+    # Extract payload (skip 4-byte length + 1-byte padding_length)
     local padding_len=$(head -c 5 "$WORKDIR/packet_decrypted" | tail -c 1 | bin_to_hex)
     padding_len=$((0x$padding_len))
     local payload_len=$((packet_len - 1 - padding_len))
@@ -504,8 +532,9 @@ send_kexinit() {
         write_uint32 0
     } > "$WORKDIR/kexinit_payload"
 
-    # Save KEXINIT (without message type byte) for exchange hash
-    tail -c +2 "$WORKDIR/kexinit_payload" > "$WORKDIR/server_kexinit"
+    # Save KEXINIT payload (including message type byte) for exchange hash
+    # RFC 4253: I_S is the "payload" which includes the SSH_MSG_KEXINIT byte
+    cp "$WORKDIR/kexinit_payload" "$WORKDIR/server_kexinit"
 
     send_packet "$WORKDIR/kexinit_payload"
 }
@@ -528,7 +557,9 @@ handle_key_exchange() {
         return 1
     fi
 
-    tail -c +2 "$WORKDIR/client_kexinit_full" > "$WORKDIR/client_kexinit"
+    # Save KEXINIT payload (including message type byte) for exchange hash
+    # RFC 4253: I_C is the "payload" which includes the SSH_MSG_KEXINIT byte
+    cp "$WORKDIR/client_kexinit_full" "$WORKDIR/client_kexinit"
 
     # Receive KEX_ECDH_INIT
     log "Waiting for KEX_ECDH_INIT..."
