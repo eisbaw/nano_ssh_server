@@ -1116,13 +1116,23 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         return;
     }
     fprintf(stderr, "DEBUG: DH shared secret computed successfully\n");
-    
+
+    /* Debug shared secret */
+    fprintf(stderr, "DEBUG: Shared secret K first 8 bytes: ");
+    for (int i = 0; i < 8; i++) {
+        fprintf(stderr, "%02x ", shared_secret[i]);
+    }
+    fprintf(stderr, "\n");
+
     /* Compute exchange hash H */
     fprintf(stderr, "DEBUG: Computing exchange hash...\n");
     fprintf(stderr, "DEBUG:   Q_C length: %u bytes (original from client)\n", client_eph_actual_len);
     fprintf(stderr, "DEBUG:   Q_C first 4 bytes: %02x %02x %02x %02x\n",
            client_ephemeral_public[0], client_ephemeral_public[1],
            client_ephemeral_public[2], client_ephemeral_public[3]);
+    fprintf(stderr, "DEBUG:   Q_S (server) first 4 bytes: %02x %02x %02x %02x\n",
+           server_ephemeral_public[0], server_ephemeral_public[1],
+           server_ephemeral_public[2], server_ephemeral_public[3]);
     compute_exchange_hash(exchange_hash,
                          client_version, SERVER_VERSION,
                          client_kexinit, client_kexinit_len_s,
