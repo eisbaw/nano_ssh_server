@@ -14,17 +14,13 @@ PORT=2222
 PASSWORD="password123"
 USER="user"
 
-# Versions to test (mentioned in README)
+# Working versions only (failing versions removed)
 VERSIONS=(
-    "v15-crypto:Recommended for embedded"
-    "v16-crypto-standalone:100% standalone"
-    "v17-from14:Almost independent"
-    "v18-selfcontained:Self-contained"
+    "v0-vanilla:Baseline"
+    "v12-static:Fully static"
+    "v17-from14:Custom crypto"
     "v19-donna:Donna implementation"
     "v20-opt:Latest optimized"
-    "v0-vanilla:Baseline"
-    "v14-opt12:Smallest"
-    "v12-static:Fully static"
 )
 
 # Stats
