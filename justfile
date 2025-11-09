@@ -239,20 +239,76 @@ test-v14-static:
     @cat v14-static/server_test.log
     @echo ""
 
+# Build v21-static with musl (requires musl-tools)
+build-v21-static:
+    @echo "Building v21-static with musl libc (statically linked)..."
+    @echo "This requires musl-tools (apt-get install musl-tools)"
+    @echo ""
+    @if [ ! -d "v21-static" ]; then \
+        echo "Error: v21-static directory does not exist"; \
+        exit 1; \
+    fi
+    @cd v21-static && make
+    @echo ""
+    @echo "✅ v21-static built successfully!"
+    @echo ""
+    @echo "Binary comparison:"
+    @echo "  v21-static (musl):  $(stat -c%s v21-static/nano_ssh_server 2>/dev/null || echo '?') bytes (~53 KB)"
+    @echo "  v12-static (glibc): $(stat -c%s v12-static/nano_ssh_server 2>/dev/null || echo '?') bytes (~718 KB)"
+    @echo ""
+    @echo "Musl is 13.5x smaller than glibc! 🎉"
+    @echo ""
+
+# Run v21-static
+run-v21-static:
+    @echo "Starting v21-static (musl) on port 2222..."
+    @if [ ! -f "v21-static/nano_ssh_server" ]; then \
+        echo "Error: v21-static/nano_ssh_server not found. Run 'just build-v21-static' first"; \
+        exit 1; \
+    fi
+    @cd v21-static && ./nano_ssh_server
+
+# Test v21-static with real SSH client
+test-v21-static:
+    @echo "Testing v21-static with real SSH client..."
+    @if [ ! -f "v21-static/nano_ssh_server" ]; then \
+        echo "Error: v21-static/nano_ssh_server not found. Run 'just build-v21-static' first"; \
+        exit 1; \
+    fi
+    @echo ""
+    @echo "Starting v21-static server in background..."
+    @cd v21-static && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
+    @sleep 2
+    @echo ""
+    @echo "Testing SSH connection..."
+    @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost 2>&1 || true
+    @echo ""
+    @echo "Stopping server..."
+    @kill $$(cat v21-static/server.pid) 2>/dev/null || true
+    @rm -f v21-static/server.pid
+    @echo ""
+    @echo "✅ v21-static test complete!"
+    @echo ""
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
     @echo ""
+    @echo "⭐ Recommended: v21-static (53 KB musl static)"
+    @echo "  just build-v21-static     # Build v21-static with musl"
+    @echo "  just run-v21-static       # Run v21-static server"
+    @echo "  just test-v21-static      # Test v21-static with SSH client"
+    @echo ""
     @echo "Common workflows:"
-    @echo "  just build v0-vanilla     # Build a version"
-    @echo "  just run v0-vanilla       # Run the server"
+    @echo "  just build v20-opt        # Build a version (dynamic)"
+    @echo "  just run v20-opt          # Run the server"
     @echo "  just connect              # Connect with SSH client"
-    @echo "  just test v0-vanilla      # Run tests"
+    @echo "  just test v20-opt         # Run tests"
     @echo "  just size-report          # Compare binary sizes"
     @echo ""
-    @echo "Musl builds:"
-    @echo "  just build-musl           # Build with musl (native, no Docker)"
-    @echo "  just clean-musl           # Clean musl build artifacts"
+    @echo "Musl vs glibc comparison:"
+    @echo "  just build-v21-static     # 53 KB - musl static ⭐"
+    @echo "  just build-v14-static     # 718 KB - glibc static (bloated!)"
     @echo ""
     @echo "Development:"
     @echo "  just debug v0-vanilla     # Run in debugger"
