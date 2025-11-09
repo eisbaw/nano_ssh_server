@@ -55,6 +55,10 @@ MAC_KEY_S2C=""
 SEQUENCE_NUM_C2S=0
 SEQUENCE_NUM_S2C=0
 
+# Packet counters (track ALL packets for sequence number initialization)
+PACKETS_SENT=0
+PACKETS_RECEIVED=0
+
 # Temporary directory for keys and state
 TMPDIR=$(mktemp -d /tmp/bash-ssh.XXXXXX)
 trap "rm -rf $TMPDIR" EXIT
@@ -176,6 +180,9 @@ read_ssh_packet() {
         # Increment sequence number
         SEQUENCE_NUM_C2S=$((SEQUENCE_NUM_C2S + 1))
 
+        # Increment packet counter
+        PACKETS_RECEIVED=$((PACKETS_RECEIVED + 1))
+
         echo "$msg_type:$msg_data"
     else
         # Plaintext mode (original code)
@@ -200,6 +207,9 @@ read_ssh_packet() {
 
         log "Received plaintext packet: type=$msg_type, payload_len=$payload_len, packet_len=$packet_len"
         log "  Payload hex (first 40 chars): ${payload:0:40}..."
+
+        # Increment packet counter
+        PACKETS_RECEIVED=$((PACKETS_RECEIVED + 1))
 
         echo "$msg_type:$msg_data"
     fi
@@ -251,6 +261,9 @@ write_ssh_packet() {
 
         # Increment sequence number
         SEQUENCE_NUM_S2C=$((SEQUENCE_NUM_S2C + 1))
+
+        # Increment packet counter
+        PACKETS_SENT=$((PACKETS_SENT + 1))
     else
         log "Sending plaintext packet: type=$msg_type, payload_len=$payload_len"
 
@@ -268,6 +281,9 @@ write_ssh_packet() {
         hex2bin "$complete_packet"
 
         log "  Packet sent successfully"
+
+        # Increment packet counter
+        PACKETS_SENT=$((PACKETS_SENT + 1))
     fi
 }
 
@@ -548,23 +564,13 @@ handle_ecdh_init() {
 
     # RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
     # Enable S2C encryption immediately after sending NEWKEYS
+    # Set sequence number to the count of packets we've already sent (KEXINIT, KEX_ECDH_REPLY, NEWKEYS)
+    SEQUENCE_NUM_S2C=$PACKETS_SENT
     ENCRYPTION_S2C_ENABLED=1
-    log "NEWKEYS sent - S2C encryption ENABLED for all outgoing packets"
-
-    # Wait for client's NEWKEYS (C implementation does this in same function)
-    log "Reading client NEWKEYS (expecting plaintext)..."
-    local client_newkeys=$(read_ssh_packet)
-    local client_msg_type="${client_newkeys%%:*}"
-
-    if [ "$client_msg_type" != "$SSH_MSG_NEWKEYS" ]; then
-        log "ERROR: Expected NEWKEYS (21) but got: $client_msg_type"
-        return 1
-    fi
-
-    # Enable C2S encryption after receiving client's NEWKEYS
-    ENCRYPTION_C2S_ENABLED=1
-    log "Client NEWKEYS received - C2S encryption ENABLED"
-    log "Full duplex encryption active (S2C=${ENCRYPTION_S2C_ENABLED}, C2S=${ENCRYPTION_C2S_ENABLED})"
+    log "NEWKEYS sent - S2C encryption ENABLED for all outgoing packets (seq starts at $SEQUENCE_NUM_S2C)"
+    log "Waiting for client NEWKEYS in main loop..."
+    # Note: We DON'T read client's NEWKEYS here - let the main loop handle it
+    # This avoids buffering issues with BASH I/O
 }
 
 # Handle service request
@@ -748,7 +754,15 @@ handle_connection() {
                 ;;
             $SSH_MSG_KEX_ECDH_INIT)
                 handle_ecdh_init "$msg_data"
-                # After handle_ecdh_init, encryption is fully enabled
+                # After handle_ecdh_init, S2C encryption is enabled, waiting for client NEWKEYS
+                ;;
+            $SSH_MSG_NEWKEYS)
+                # Enable C2S encryption after receiving client's NEWKEYS
+                # Set sequence number to the count of packets we've received so far
+                SEQUENCE_NUM_C2S=$PACKETS_RECEIVED
+                ENCRYPTION_C2S_ENABLED=1
+                log "Client NEWKEYS received - C2S encryption ENABLED (seq starts at $SEQUENCE_NUM_C2S)"
+                log "Full duplex encryption active (S2C seq=$SEQUENCE_NUM_S2C, C2S seq=$SEQUENCE_NUM_C2S)"
                 ;;
             $SSH_MSG_SERVICE_REQUEST)
                 handle_service_request "$msg_data"
