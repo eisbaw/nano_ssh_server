@@ -105,10 +105,25 @@ just test <optimized-version>  # Must STILL be GREEN
 | Phase | Gate | Criteria |
 |-------|------|----------|
 | After each component | Unit tests | Pass |
-| After integration | SSH client test | "Hello World" received |
-| Before git commit | All tests | 100% pass |
+| After integration | Real SSH client test | "Hello World" printed by SSH client |
+| Before git commit | Real SSH + All tests | SSH client prints "Hello World" + 100% pass |
 | Before optimization | Memory test | Zero leaks (valgrind) |
-| Before next phase | Full suite | All green |
+| Before next phase | Full suite | All green + Real SSH client works |
+
+**CRITICAL: Real SSH Client Testing**
+
+You MUST test with a real SSH client (using sshpass) before ANY git commit:
+
+```bash
+# MANDATORY before every commit:
+just test <version>              # Automated tests
+echo "password123" | sshpass ssh -p 2222 user@localhost  # Real SSH client
+
+# You MUST see the SSH client print:
+# Hello World
+
+# If you don't see "Hello World" printed: DO NOT COMMIT
+```
 
 ### 5. SIZE MATTERS
 
@@ -187,11 +202,16 @@ just build <version>
 # 7. Test
 just test <version>
 
-# 8. If tests fail: FIX, don't proceed
+# 8. REAL SSH CLIENT TEST (MANDATORY)
+# Start server: just run <version>
+# In another terminal: echo "password123" | sshpass ssh -p 2222 user@localhost
+# MUST see "Hello World" printed
 
-# 9. If tests pass: Mark task [x] in TODO.md
+# 9. If tests fail: FIX, don't proceed
 
-# 10. Commit
+# 10. If tests pass AND SSH client prints "Hello World": Mark task [x] in TODO.md
+
+# 11. Commit (ONLY if real SSH client test passed)
 git add .
 git commit -m "Clear description of what was done"
 
@@ -209,14 +229,19 @@ just test v0-vanilla
 # Full test suite (before commit)
 just test-all
 
-# Memory leak test (before phase completion)
-just valgrind v0-vanilla
-
-# Manual test (for debugging)
+# MANDATORY: Real SSH client test (MUST pass before commit)
 just run v0-vanilla
 # In another terminal:
-just connect
+echo "password123" | sshpass ssh -p 2222 user@localhost
+# You MUST see "Hello World" printed by the SSH client
+
+# Memory leak test (before phase completion)
+just valgrind v0-vanilla
 ```
+
+**CRITICAL: You MUST test with sshpass and real SSH client before making git commits.**
+
+The SSH client MUST print "Hello World" to stdout. If you don't see this output, DO NOT commit.
 
 **Test failure response:**
 
@@ -282,10 +307,14 @@ git commit -m "v2-opt1: Describe optimization and size impact"
 # Checklist:
 [ ] Code compiles without warnings
 [ ] All tests pass (just test-all)
+[ ] REAL SSH CLIENT TEST PASSES (echo "password123" | sshpass ssh -p 2222 user@localhost)
+[ ] SSH client prints "Hello World" to stdout
 [ ] TODO.md updated (tasks marked [x])
 [ ] Commit message is clear
 [ ] No temporary/debug files included
 ```
+
+**MANDATORY: Every commit MUST be tested with a real SSH client first.**
 
 ### Before moving to next phase:
 
@@ -648,6 +677,8 @@ just test v0-vanilla  # Runs (even if no tests yet)
 🚩 "This test is wrong" (without proof)
 🚩 Committing with "wip" message
 🚩 Not reading documentation first
+🚩 **Committing without testing with real SSH client (sshpass)**
+🚩 **Committing without seeing "Hello World" printed by SSH client**
 
 ---
 
@@ -660,8 +691,9 @@ just test v0-vanilla  # Runs (even if no tests yet)
 - [ ] Implement ONE task
 - [ ] `just build <version>`
 - [ ] `just test <version>`
+- [ ] **Test with real SSH client (sshpass) - MUST see "Hello World"**
 - [ ] Mark task `[x]` in TODO.md
-- [ ] `git commit` with clear message
+- [ ] `git commit` with clear message (ONLY after real SSH test passes)
 - [ ] Repeat
 
 **Every phase completion:**
