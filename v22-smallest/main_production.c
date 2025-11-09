@@ -1,6 +1,5 @@
-/* v21: Source-level optimized SSH server */
+/* v22: Radically optimized SSH server - stdio.h removed */
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -69,6 +68,10 @@ typedef struct {
 } crypto_state_t;
 
 static crypto_state_t encrypt_state_c2s = {0}, encrypt_state_s2c = {0};
+
+/* Static buffers to avoid malloc/free (v22 optimization) */
+static uint8_t static_packet_buf[MAX_PACKET_SIZE + 4];  /* +4 for packet_length field */
+static uint8_t static_encrypted_buf[MAX_PACKET_SIZE];
 
 /*
  * Generate random bytes (libsodium provides this)
@@ -347,32 +350,27 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
         total_packet_len = 4 + packet_len;
         size_t remaining = total_packet_len - 16;  /* Already read 16 bytes */
 
-        /* Allocate buffer for full decrypted packet */
-        packet_buf = malloc(total_packet_len);
-        if (!packet_buf) {
-            return -1;
+        /* Use static buffer instead of malloc (v22 optimization) */
+        if (total_packet_len > sizeof(static_packet_buf)) {
+            return -1;  /* Packet too large */
         }
+        packet_buf = static_packet_buf;
 
         /* Copy decrypted first block */
         memcpy(packet_buf, decrypted_block, 16);
 
         /* Read and decrypt remaining packet bytes */
         if (remaining > 0) {
-            uint8_t *encrypted_remaining = malloc(remaining);
-            if (!encrypted_remaining) {
-                free(packet_buf);
-                return -1;
+            uint8_t *encrypted_remaining = static_encrypted_buf;
+            if (remaining > sizeof(static_encrypted_buf)) {
+                return -1;  /* Remaining too large */
             }
 
             n = recv_data(fd, encrypted_remaining, remaining);
             if (n <= 0) {
-                free(encrypted_remaining);
-                free(packet_buf);
                 return n;
             }
             if (n < (ssize_t)remaining) {
-                free(encrypted_remaining);
-                free(packet_buf);
                 return -1;
             }
 
@@ -380,18 +378,14 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
              * Counter continues automatically from first block */
             memcpy(packet_buf + 16, encrypted_remaining, remaining);
             aes128_ctr_crypt(&encrypt_state_c2s.aes_ctx, packet_buf + 16, remaining);
-
-            free(encrypted_remaining);
         }
 
         /* Read MAC (32 bytes for HMAC-SHA256) */
         n = recv_data(fd, mac, 32);
         if (n <= 0) {
-            free(packet_buf);
             return n;
         }
         if (n < 32) {
-            free(packet_buf);
             return -1;
         }
 
@@ -401,7 +395,6 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
                            encrypt_state_c2s.seq_num, packet_buf, total_packet_len);
 
         if (ct_verify_32(computed_mac, mac) != 0) {
-            free(packet_buf);
             return -1;
         }
 
@@ -414,7 +407,6 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 
         /* Calculate payload length */
         if (padding_len >= packet_len - 1) {
-            free(packet_buf);
             return -1;
         }
 
@@ -422,14 +414,11 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 
         /* Check payload buffer size */
         if (payload_len > payload_max) {
-            free(packet_buf);
             return -1;
         }
 
         /* Copy payload */
         memcpy(payload, packet_buf + 5, payload_len);
-
-        free(packet_buf);
 
         return payload_len;
 
@@ -452,20 +441,18 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
             return -1;
         }
 
-        /* Allocate buffer for rest of packet */
-        packet_buf = malloc(packet_len);
-        if (!packet_buf) {
+        /* Use static buffer for unencrypted packets */
+        if (packet_len > sizeof(static_packet_buf)) {
             return -1;
         }
+        packet_buf = static_packet_buf;
 
         /* Read rest of packet */
         n = recv_data(fd, packet_buf, packet_len);
         if (n <= 0) {
-            free(packet_buf);
             return n;
         }
         if (n < (ssize_t)packet_len) {
-            free(packet_buf);
             return -1;
         }
 
@@ -474,7 +461,6 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 
         /* Calculate payload length */
         if (padding_len >= packet_len - 1) {
-            free(packet_buf);
             return -1;
         }
 
@@ -482,14 +468,11 @@ ssize_t recv_packet(int fd, uint8_t *payload, size_t payload_max) {
 
         /* Check payload buffer size */
         if (payload_len > payload_max) {
-            free(packet_buf);
             return -1;
         }
 
         /* Copy payload */
         memcpy(payload, packet_buf + 1, payload_len);
-
-        free(packet_buf);
 
         return payload_len;
     }

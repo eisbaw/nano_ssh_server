@@ -8,17 +8,16 @@
 # NO OpenSSL dependency!
 
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
+CFLAGS = -Wall -Wextra -std=c11 -Os -flto=auto -ffunction-sections -fdata-sections \
          -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector \
-         -fmerge-all-constants -fno-ident -finline-small-functions \
+         -fmerge-all-constants -fno-ident -finline-functions -finline-limit=300 \
          -fshort-enums -fomit-frame-pointer -ffast-math -fno-math-errno \
          -fvisibility=hidden -Wno-unused-result -fno-builtin -fno-plt \
          -fwhole-program -fipa-pta -fno-common \
          -D_POSIX_C_SOURCE=200809L
 LDFLAGS = -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
-          -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr
-# Linker script removed - causes segfault with complex crypto code
-# TODO: Create v22-compatible linker script
+          -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr \
+          -Wl,-T,linker_v22.ld
 
 SRCS = main_production.c f25519.c fprime.c ed25519.c edsign.c sha512.c curve25519-donna-c64.c
 OBJS = $(SRCS:.c=.o)
