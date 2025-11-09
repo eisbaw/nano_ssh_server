@@ -121,3 +121,72 @@ Where:
 - RFC 4253: SSH Transport Layer Protocol
 - RFC 8332: RSA SHA-2 Signature Algorithms
 - RFC 3526: DH Group14 Prime
+
+## Latest Findings (Continued Investigation)
+
+### Protocol-Level Analysis
+
+After adding extensive debug output, discovered:
+
+**Key Exchange Values:**
+- Q_C (client ephemeral): 257 bytes, first bytes: `00 d4 aa 3b` (0x00 padding because MSB=0xd4)
+- Q_S (server ephemeral): 256 bytes, first bytes: `23 59 5d 03` (no padding, MSB=0x23)
+- K (shared secret): First bytes: `d5 af c7 5b ...` (MSB=0xd5, needs 0x00 padding when encoded as mpint)
+
+**Exchange Hash Components Verified:**
+1. V_C, V_S: Version strings encoded as SSH strings ✓
+2. I_C, I_S: KEXINIT payloads encoded as SSH strings ✓
+3. K_S: Host key blob encoded as SSH string ✓
+4. Q_C: 257 bytes (kept as received from client, including padding) ✓
+5. Q_S: 256 bytes (generated locally, encoded as mpint) ✓
+6. K: 256 bytes raw data (encoded as 257-byte mpint with padding) ✓
+
+**All encodings appear correct according to RFC 4253 Section 8.**
+
+### Why Tests Pass But Real SSH Fails
+
+**Unit Tests (`test_rsa.c`):**
+- Test RSA sign/verify with simple test vectors
+- Test public key export format
+- Test wrong message rejection
+- **DO NOT test:** Exchange hash computation, mpint encoding in SSH protocol, real client verification
+
+**Real SSH Connection:**
+- OpenSSH client computes exchange hash from received packets
+- Must match server's exchange hash computation EXACTLY
+- Any difference in encoding (padding, length, byte order) causes mismatch
+- Signature verification fails even though RSA is cryptographically correct
+
+### Remaining Mystery
+
+Despite all components appearing correct:
+- RSA signatures decrypt correctly (verified with OpenSSL)
+- All mpint encodings follow RFC specifications  
+- Q_C, Q_S, K are all handled with proper padding
+- KEXINIT payloads and version strings are correct
+
+**Yet OpenSSH still reports "incorrect signature"**
+
+This suggests either:
+1. A subtle bug in how we compute the shared secret K (bignum library issue?)
+2. A difference in how OpenSSH interprets one of the exchange hash components
+3. An issue with the message sequence or packet structure we haven't identified
+
+### Comparison with v14-static (Ed25519)
+
+v14-static WORKS with:
+- Ed25519 signatures (64 bytes, no padding needed)
+- Curve25519 key exchange (32 bytes, simpler)
+- Same SSH protocol implementation
+
+This proves:
+- Our SSH protocol flow is correct
+- Version exchange, KEXINIT, packet handling all work
+- The issue is specific to RSA + DH Group14 combination
+
+### Next Steps Recommended
+
+1. **Packet capture analysis**: Use Wireshark to compare our KEX_REPLY with a working SSH server
+2. **OpenSSH source review**: Check how OpenSSH computes exchange hash for diffie-hellman-group14-sha256
+3. **Test with other clients**: Try Paramiko, PuTTY to see if error is OpenSSH-specific
+4. **Consider Ed25519**: v14-static proves it works; simpler and more modern
