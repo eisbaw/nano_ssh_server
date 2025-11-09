@@ -339,6 +339,44 @@ test-v17-static2:
     @echo "✅ v17-static2 test complete!"
     @echo ""
 
+# ============================================================================
+# BASH SSH Server (vbash-ssh-server) - Shell Script Implementation
+# ============================================================================
+
+# Run BASH SSH server (simple version)
+run-bash-simple:
+    @echo "Starting BASH SSH Server (simple) on port 2222..."
+    @if [ ! -f "vbash-ssh-server/nano_ssh_server_simple.sh" ]; then \
+        echo "Error: vbash-ssh-server/nano_ssh_server_simple.sh not found"; \
+        exit 1; \
+    fi
+    @cd vbash-ssh-server && ./nano_ssh_server_simple.sh 2222
+
+# Run BASH SSH server (full version - experimental)
+run-bash:
+    @echo "Starting BASH SSH Server (full) on port 2222..."
+    @if [ ! -f "vbash-ssh-server/nano_ssh_server.sh" ]; then \
+        echo "Error: vbash-ssh-server/nano_ssh_server.sh not found"; \
+        exit 1; \
+    fi
+    @cd vbash-ssh-server && ./nano_ssh_server.sh
+
+# Test BASH SSH server
+test-bash:
+    @echo "Testing BASH SSH Server..."
+    @cd vbash-ssh-server && make check
+    @echo ""
+    @echo "To test manually:"
+    @echo "  Terminal 1: just run-bash-simple"
+    @echo "  Terminal 2: nc localhost 2222"
+    @echo "  You should see: SSH-2.0-BashSSH_0.1"
+
+# Clean BASH SSH server temporary files
+clean-bash:
+    @echo "Cleaning BASH SSH server temporary files..."
+    @rm -rf /tmp/bash_ssh_* 2>/dev/null || true
+    @echo "✓ Clean complete"
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
@@ -358,6 +396,11 @@ help:
     @echo "Musl vs glibc comparison:"
     @echo "  just build-v21-static     # 53 KB - musl static ⭐"
     @echo "  just build-v14-static     # 718 KB - glibc static (bloated!)"
+    @echo ""
+    @echo "BASH SSH Server:"
+    @echo "  just run-bash-simple      # Run BASH implementation (simple)"
+    @echo "  just run-bash             # Run BASH implementation (full)"
+    @echo "  just test-bash            # Test BASH server"
     @echo ""
     @echo "Development:"
     @echo "  just debug v0-vanilla     # Run in debugger"
