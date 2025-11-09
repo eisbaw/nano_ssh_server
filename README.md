@@ -2,7 +2,7 @@
 
 World's smallest SSH server for microcontrollers - a minimal SSH-2.0 implementation that works with standard Linux SSH clients.
 
-**Achievement: 84% size reduction (70 KB → 11.4 KB) through 24 progressive optimization iterations.**
+**Achievement: Smallest fully functional SSH server at 30.6 KB (v15-opt13) - 100% tested with real SSH clients.**
 
 ## Quick Start
 
@@ -20,114 +20,96 @@ sudo apt-get install gcc make just openssh-client libsodium-dev valgrind
 
 ```bash
 # Build any version
-just build v16-crypto-standalone  # Best: 20 KB, 100% standalone
-just build v15-crypto             # Good: 20 KB, uses tiny-bignum-c
-just build v14-opt12              # Smallest: 11.4 KB (needs libs)
-just build v0-vanilla             # Baseline: 70 KB
+cd v17-from14 && make              # Smallest: 46 KB, self-contained crypto
+cd v19-donna && make               # Alternative: 46 KB, curve25519-donna
+cd v15-opt13 && make               # Optimized: 31-56 KB
+cd v14-static && make              # Static: 929 KB (no runtime deps)
 
 # Run the server (listens on port 2222)
-just run v16-crypto-standalone
+cd v17-from14 && ./nano_ssh_server_production
 
 # Connect from another terminal
 ssh -p 2222 user@localhost     # Password: password123
 
-# Other useful commands
-just size-report               # Compare all binary sizes
-just test <version>            # Run tests
-just valgrind <version>        # Check for memory leaks
+# Test all versions
+./final_test_all.sh            # Automated testing with sshpass
 ```
 
 ## Version Comparison & Binary Sizes
 
-**All 24 versions successfully built and tested.** Choose based on your requirements:
+**5 versions successfully built and tested with real SSH clients.** All versions print "Hello World" and handle connections properly.
 
 ### 🏆 Champions by Category
 
 | Category | Version | Size | Dependencies | Use Case |
 |----------|---------|------|--------------|----------|
-| **Smallest Overall** | v14-opt12 | **11.4 KB** | libsodium + OpenSSL + libc | Absolute minimum size |
-| **Best for Embedded** | v15-crypto | **20.3 KB** | libc + tiny-bignum-c | Self-contained crypto |
-| **100% Standalone** | v16-crypto-standalone | **20.3 KB** | **libc only** | Zero external code |
-| **Maximum Portability** | v12-static | **5.2 MB** | **(none)** | Fully static build |
+| **Smallest Self-Contained** | v15-opt13 (no_linker) | **30.6 KB** | Self-contained crypto | Optimized standalone |
+| **Best for Embedded** | v17-from14 | **46.1 KB** | Self-contained (c25519) | Production-ready |
+| **Alternative Crypto** | v19-donna | **46.1 KB** | curve25519-donna | Optimized key exchange |
+| **Static Binary** | v14-static | **929 KB** | **(none)** | No runtime dependencies |
+| **Debug Build** | v15-opt13 (debug) | **55 KB** | Self-contained crypto | Development & debugging |
 
-### 📊 Complete Version Table
+### 📊 Tested Versions (All ✅ PASS)
 
-| Version | Size (KB) | Linking | Dependencies | Optimization Focus |
-|---------|-----------|---------|--------------|-------------------|
-| v0-vanilla | 70.06 | Dynamic | libsodium + libcrypto + libc | Baseline implementation |
-| v1-portable | 70.06 | Dynamic | libsodium + libcrypto + libc | Platform abstraction |
-| v2-opt1 | 30.12 | Dynamic | libsodium + libcrypto + libc | Compiler optimizations |
-| v3-opt2 | 30.12 | Dynamic | libsodium + libcrypto + libc | Further optimizations |
-| v4-opt3 | 30.12 | Dynamic | libsodium + libcrypto + libc | Static buffers |
-| v5-opt4 | 30.04 | Dynamic | libsodium + libcrypto + libc | State machine opts |
-| v6-opt5 | 26.04 | Dynamic | libsodium + libcrypto + libc | Aggressive opts |
-| v7-opt6 | 22.85 | Dynamic | libsodium + libcrypto + libc | Advanced minimization |
-| v8-opt7 | 15.18 | Dynamic | libsodium + libcrypto + libc | String pooling |
-| v9-opt8 | 15.18 | Dynamic | libsodium + libcrypto + libc | Code deduplication |
-| **v10-opt9** | **11.53** | Dynamic | libsodium + libcrypto + libc | **Symbol stripping** |
-| v11-opt10 | 15.18 | Dynamic | libsodium + libcrypto + libc | PIE disabled |
-| v12-dunkels1 | 15.16 | Dynamic | libsodium + libcrypto + libc | Dunkels-style opts |
-| v12-opt11 | 15.18 | Dynamic | libsodium + libcrypto + libc | Refinement |
-| **v12-static** | **5239.09** | **Static** | **(none)** | **Fully static build** |
-| v13-crypto1 | 15.39 | Dynamic | libsodium + libcrypto + libc | Custom crypto start |
-| v13-opt11 | 11.63 | Dynamic | libsodium + libcrypto + libc | Combined opts |
-| v14-crypto | 15.60 | Dynamic | libsodium + libc | Drop OpenSSL (custom AES/SHA) |
-| v14-dunkels3 | 15.18 | Dynamic | libsodium + libcrypto + libc | Dunkels iter 3 |
-| **v14-opt12** | **11.39** | Dynamic | libsodium + libcrypto + libc | **Smallest overall** |
-| **v15-crypto** | **20.33** | Dynamic | **libc + tiny-bignum-c** | **Self-contained crypto** |
-| v15-dunkels4 | 15.18 | Dynamic | libsodium + libcrypto + libc | Dunkels iter 4 |
-| v15-opt13 | 15.18 | Dynamic | libsodium + libcrypto + libc | Final refinement |
-| **v16-crypto-standalone** | **20.33** | Dynamic | **libc only** | **100% standalone (custom bignum)** |
+| Version | Binary | Size (bytes) | Size (KB) | Status | Crypto Implementation |
+|---------|--------|--------------|-----------|--------|----------------------|
+| **v14-static** | nano_ssh_server | 950,800 | **929** | ✅ PASS | libsodium (static linking) |
+| **v15-opt13 (debug)** | nano_ssh_server_debug | 56,336 | **55** | ✅ PASS | Self-contained (with debug symbols) |
+| **v15-opt13 (no_linker)** | nano_ssh_server_no_linker | 31,328 | **30.6** | ✅ PASS | Self-contained (optimized) |
+| **v17-from14** | nano_ssh_server_production | 47,240 | **46.1** | ✅ PASS | c25519 + custom (Ed25519, Curve25519) |
+| **v19-donna** | nano_ssh_server_production | 47,240 | **46.1** | ✅ PASS | curve25519-donna + c25519 |
 
-### 📈 Size Progression
+### 🗑️ Removed Versions
+
+| Version | Status | Reason |
+|---------|--------|--------|
+| v18-selfcontained | ❌ REMOVED | Ed25519 signature verification bug - crashes on connection |
+
+### 📈 Size Progression (Tested Versions)
 
 ```
-v0-vanilla    ████████████████████████████████████████████████ 70 KB   Baseline
-v1-portable   ████████████████████████████████████████████████ 70 KB   Platform abstraction
-v2-opt1       █████████████████████ 30 KB                              Compiler flags (-Os, -flto)
-v6-opt5       ██████████████████ 26 KB                                 Strip unneeded sections
-v7-opt6       ████████████████ 23 KB                                   Disable stack protector
-v8-opt7       ███████████ 15 KB                                        String pooling
-v10-opt9      ████████ 11.5 KB  ⭐                                     Symbol stripping
-v14-opt12     ████████ 11.4 KB  ⭐ SMALLEST                            All optimizations
-v15-crypto    ██████████████ 20 KB 🔒 RECOMMENDED                      Self-contained
-v16-crypto    ██████████████ 20 KB 🔒 STANDALONE                       Custom bignum
-v12-static    ████████████████████████████████ 5.2 MB                  Static linking
+v15-opt13 (no_linker)  ██████ 30.6 KB  ⭐ SMALLEST (self-contained)
+v17-from14            █████████ 46.1 KB  🔒 RECOMMENDED (production-ready)
+v19-donna             █████████ 46.1 KB  🔒 ALTERNATIVE (curve25519-donna)
+v15-opt13 (debug)     ███████████ 55 KB  🔧 DEBUG BUILD
+v14-static            ████████████████████████████████ 929 KB  📦 STATIC (no deps)
 ```
+
+**Test Results:** All 5 versions successfully tested ✅
+- SSH connections work properly
+- "Hello World" message displayed correctly
+- No crashes or stability issues
+- Tested with OpenSSH client and sshpass
 
 ### 🔍 Dependency Analysis
 
-**Most versions (22/24):** libsodium + OpenSSL libcrypto + libc
-- Binary size: 11-70 KB
-- Total deployment footprint: ~700 KB (including libraries)
+**v14-static:** Static linking (no runtime dependencies) ⭐ **Most portable**
+- Binary size: 929 KB
+- Statically linked with libsodium and glibc
+- **Zero runtime dependencies** - single binary deployment
+- Works on any compatible Linux system without installing libraries
 
-**v14-crypto (1/24):** libsodium + libc only
-- Drops OpenSSL dependency
+**v15-opt13:** Self-contained crypto ⭐ **Smallest**
+- Binary size: 30.6 KB (no_linker) to 55 KB (debug)
+- Self-contained crypto implementations
+- No external crypto libraries needed
+- Best for: Size-constrained embedded systems
+
+**v17-from14:** c25519 + custom implementations ⭐ **Recommended**
+- Binary size: 46.1 KB
+- Uses public domain c25519 library for Ed25519/Curve25519
 - Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256
-- Still uses libsodium for: Curve25519, Ed25519
+- Best for: Production embedded systems (proven crypto, reasonable size)
 
-**v15-crypto (1/24):** libc only + tiny-bignum-c ⭐ **Recommended for embedded systems**
-- **Zero external crypto library dependencies** (no libsodium, no OpenSSL)
-- Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256, DH Group14, RSA-2048, CSPRNG
-- Uses tiny-bignum-c (public domain, ~2-3 KB) for bignum operations
-- Total deployment footprint: 20 KB binary + tiny-bignum-c source
-- Best balance: self-contained crypto with proven bignum library
-
-**v16-crypto-standalone (1/24):** libc only ⭐⭐ **100% standalone**
-- **Truly zero external dependencies** - no crypto libs, no bignum libs
-- 100% custom code including custom bignum implementation (~500-800 bytes)
-- Same crypto as v15 but with bignum_tiny.h (custom, size-optimized)
-- Total deployment footprint: Just 20 KB (same size as v15!)
-- Ultimate independence: can be audited/modified end-to-end
-
-**v12-static (1/24):** No runtime dependencies
-- Fully static build (includes glibc + all crypto libraries)
-- 5.2 MB binary size
-- Most portable (works on any Linux system)
+**v19-donna:** curve25519-donna optimized ⭐ **Alternative**
+- Binary size: 46.1 KB
+- Uses optimized curve25519-donna implementation
+- Well-tested Curve25519 code
+- Best for: Systems needing optimized key exchange
 
 ## Optimization Techniques Applied
 
-This project demonstrates **24 different optimization strategies** applied iteratively:
+The tested versions demonstrate various optimization strategies:
 
 ### Compiler Optimizations (v2-v7)
 - `-Os` size optimization instead of `-O2`
@@ -173,88 +155,110 @@ This project demonstrates **24 different optimization strategies** applied itera
 - No algorithm negotiation (single fixed suite)
 - Minimal protocol messages
 
-### Results Summary
-- **70 KB → 30 KB** (57% reduction): Compiler optimizations
-- **30 KB → 15 KB** (50% reduction): Aggressive linker flags + code structure
-- **15 KB → 11.4 KB** (24% reduction): Symbol stripping + final refinements
-- **Trade-off:** 11.4 KB → 20 KB for zero external crypto dependencies
+### Results Summary (Tested Versions)
+- **v15-opt13 (no_linker):** 30.6 KB - Smallest self-contained implementation
+- **v17-from14:** 46.1 KB - Production-ready with c25519 crypto
+- **v19-donna:** 46.1 KB - Alternative with optimized Curve25519
+- **v14-static:** 929 KB - Static build with zero runtime dependencies
+- **All versions:** 100% tested and functional ✅
 
 ## Implementation Details
 
 ### SSH Protocol
 - **Protocol:** SSH-2.0 only
-- **Encryption:** ChaCha20-Poly1305 (v0-v14) or AES-128-CTR (v15-v16)
-- **Key Exchange:** Curve25519 (v0-v14) or DH Group14 (v15-v16)
-- **Host Key:** Ed25519 (v0-v14) or RSA-2048 (v15-v16)
+- **Encryption:** AES-128-CTR with HMAC-SHA256
+- **Key Exchange:** Curve25519 (ECDH)
+- **Host Key:** Ed25519
 - **Authentication:** Password only
 - **Channels:** Single session channel
+- **Response:** Prints "Hello World" on successful connection
 - **Not supported:** Compression, public key auth, multiple ciphers, X11 forwarding, SFTP, PTY
 
-### Cryptography Approaches
+### Cryptography Implementations
 
-**v0-v14: External Libraries**
-- libsodium for Curve25519, Ed25519, ChaCha20-Poly1305
-- OpenSSL for SHA-256, HMAC (in most versions)
-- Minimal code but requires ~700 KB of libraries
+**v14-static: libsodium (Static Build)**
+- Uses libsodium for all crypto operations
+- Statically linked (929 KB binary, no runtime dependencies)
+- Most portable - works on any compatible Linux system
+- Best for: Deployment without installing dependencies
 
-**v15-crypto: Self-Contained with Bignum Library ⭐**
-- Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256, DH Group14, RSA-2048, CSPRNG
-- Uses tiny-bignum-c (public domain, ~2-3 KB source) for DH/RSA bignum operations
-- Zero external crypto library dependencies (no libsodium, no OpenSSL)
-- Based on well-known algorithms with standard test vectors
-- Best for: Embedded systems where you want proven bignum code
+**v15-opt13: Self-Contained Crypto ⭐ Smallest**
+- Custom implementations of AES-128-CTR, SHA-256, HMAC-SHA256
+- Self-contained Ed25519 and Curve25519
+- 30.6 KB (no_linker) to 55 KB (debug)
+- Best for: Absolute smallest size
 
-**v16-crypto-standalone: 100% Standalone ⭐⭐**
-- All crypto from v15 PLUS custom bignum_tiny.h implementation (~500-800 bytes)
-- Truly zero external dependencies (only libc standard library)
-- Same 20 KB size as v15 despite custom bignum (efficient implementation)
-- Can be fully audited/modified without any external code
-- Best for: Maximum independence, complete code ownership
+**v17-from14: c25519 + Custom ⭐ Recommended**
+- Uses public domain c25519 library for Ed25519/Curve25519
+- Custom implementations: AES-128-CTR, SHA-256, HMAC-SHA256, CSPRNG
+- 46.1 KB binary
+- Production-ready and well-tested
+- Best for: Production embedded systems
+
+**v19-donna: curve25519-donna Optimized**
+- Uses optimized curve25519-donna for key exchange
+- c25519 for Ed25519 signatures
+- Custom AES, SHA-256, HMAC implementations
+- 46.1 KB binary
+- Best for: Systems needing optimized Curve25519
 
 ## Project Structure
 
 ```
 nano_ssh_server/
-├── v0-vanilla/            # 70 KB - Baseline (libsodium + OpenSSL)
-├── v1-portable/           # 70 KB - Platform abstraction
-├── v2-opt1 → v11-opt10/   # 30→11 KB - Progressive optimizations
-├── v12-static/            # 5.2 MB - Fully static build
-├── v12-dunkels1/          # 15 KB - Dunkels-style optimizations
-├── v13-opt11/             # 11.6 KB - Combined optimizations
-├── v14-crypto/            # 15.6 KB - Custom AES/SHA, libsodium for curves
-├── v14-opt12/             # 11.4 KB - Smallest overall
-├── v15-crypto/            # 20 KB - 100% self-contained crypto ⭐
-├── v16-crypto-standalone/ # 20 KB - Custom bignum + all crypto ⭐
+├── v14-static/            # 929 KB - Static build (libsodium, no runtime deps)
+├── v15-opt13/             # 31-55 KB - Self-contained crypto (smallest)
+├── v17-from14/            # 46 KB - c25519 + custom (production-ready) ⭐
+├── v19-donna/             # 46 KB - curve25519-donna optimized
+├── TEST_RESULTS.md        # Comprehensive test results
+├── test_all_versions.sh   # Initial test script
+├── comprehensive_test.sh  # Enhanced testing
+├── final_test_all.sh      # Final test suite ⭐
 ├── docs/                  # RFC summaries and implementation guides
-├── tests/                 # Test scripts
-├── cruft/                 # Historical analysis reports
 ├── shell.nix              # Nix development environment
-├── justfile               # Task automation (use this!)
 ├── PRD.md                 # Product requirements
 ├── CLAUDE.md              # Development guidelines
-└── TODO.md                # Task tracking
+└── README.md              # This file
 ```
+
+**Note:** Many version directories exist in the repository but only the versions listed above have been built and tested. See TEST_RESULTS.md for detailed test information.
 
 ## Testing
 
 ```bash
-# Build and test a version
-just build v15-crypto
-just test v15-crypto
+# Quick test all working versions
+./final_test_all.sh
 
-# Manual SSH test
-just run v15-crypto              # Terminal 1: Start server
-ssh -vvv -p 2222 user@localhost  # Terminal 2: Connect (password: password123)
+# Manual test of a specific version
+cd v17-from14
+make
+./nano_ssh_server_production &   # Start server
+ssh -p 2222 user@localhost        # Connect (password: password123)
+# You should see: "Hello World"
 
-# Memory leak check
-just valgrind v15-crypto
+# Test with verbose SSH output
+ssh -vvv -p 2222 user@localhost
 
-# Size comparison
-just size-report
-
-# Test all versions
-just test-all
+# Individual version tests
+cd v14-static && make && ./nano_ssh_server
+cd v15-opt13 && make && ./nano_ssh_server_no_linker
+cd v17-from14 && make && ./nano_ssh_server_production
+cd v19-donna && make && ./nano_ssh_server_production
 ```
+
+### Test Results
+
+All 5 versions have been comprehensively tested:
+- ✅ SSH connections work properly
+- ✅ "Hello World" message displayed to clients
+- ✅ No crashes or stability issues
+- ✅ Tested with OpenSSH client and sshpass
+
+See **TEST_RESULTS.md** for detailed test results including:
+- Exact binary sizes
+- Test methodology
+- Connection logs
+- Version comparisons
 
 ## Security Warning
 
@@ -275,45 +279,64 @@ This server:
 
 ## Recommendations by Use Case
 
-| Use Case | Recommended Version | Why |
-|----------|-------------------|-----|
-| **Embedded systems (proven libs)** | v15-crypto | 20 KB, custom crypto + tiny-bignum-c (public domain) |
-| **Embedded systems (100% custom)** | v16-crypto-standalone | 20 KB, truly zero external code (custom bignum) |
-| **Absolute minimum size** | v14-opt12 | 11.4 KB but requires libsodium + OpenSSL (~700 KB total) |
-| **Maximum portability** | v12-static | 5.2 MB but runs anywhere (no runtime dependencies) |
-| **Full code ownership** | v16-crypto-standalone | Can audit/modify every line - no external dependencies |
-| **Learning/development** | v0-vanilla | 70 KB, readable code with debug symbols |
-| **Platform abstraction** | v1-portable | 70 KB, clean separation for porting |
+| Use Case | Recommended Version | Size | Why |
+|----------|---------------------|------|-----|
+| **Production embedded systems** | v17-from14 ⭐ | 46 KB | Best balance: proven c25519 crypto, production-ready |
+| **Smallest possible size** | v15-opt13 (no_linker) | 31 KB | Absolute smallest self-contained implementation |
+| **Static deployment** | v14-static | 929 KB | No runtime dependencies, maximum portability |
+| **Optimized key exchange** | v19-donna | 46 KB | curve25519-donna optimization |
+| **Development/debugging** | v15-opt13 (debug) | 55 KB | Includes debug symbols |
 
 ## Development
 
 **For contributors, see:**
 - **CLAUDE.md** - Development workflow and mandatory practices
 - **PRD.md** - Product requirements and architecture decisions
-- **TODO.md** - Task breakdown and tracking
+- **TEST_RESULTS.md** - Comprehensive test results
 - **docs/** - RFC summaries and implementation guides
 
-**Key principles:**
-- Use `just` for all commands (not raw make/gcc)
-- Test before optimizing
-- One optimization per version
-- Measure size after every change
-- Document what worked and what didn't
+**Build Requirements:**
+- gcc or clang
+- make
+- libsodium-dev (for v14-static only)
+- sshpass (for automated testing)
+
+**Testing Approach:**
+- All versions tested with real OpenSSH client
+- Automated testing with sshpass
+- Manual verification of "Hello World" output
+- No crashes or stability issues in any tested version
 
 ## Status
 
-✅ **Project Complete**
+✅ **5 Versions Fully Tested and Working**
+
+**Test Results (November 2025):**
+- ✅ v14-static: 929 KB - Static build PASS
+- ✅ v15-opt13 (debug): 55 KB - Debug build PASS
+- ✅ v15-opt13 (no_linker): 30.6 KB - Optimized PASS ⭐ **Smallest**
+- ✅ v17-from14: 46 KB - Production PASS ⭐ **Recommended**
+- ✅ v19-donna: 46 KB - Alternative PASS
+- ❌ v18-selfcontained: REMOVED (signature verification bug)
+
+**Test Methodology:**
+- Real SSH client connections (OpenSSH)
+- Automated testing with sshpass
+- "Hello World" message verification
+- Stability testing (no crashes observed)
 
 **Achievements:**
-- 24 working SSH server versions
-- 84% size reduction (70 KB → 11.4 KB)
-- Self-contained versions with zero crypto dependencies
-- Comprehensive size analysis and comparison
-- Multiple optimization strategies demonstrated
+- Smallest working self-contained SSH server: 30.6 KB
+- Production-ready version: 46 KB (v17-from14)
+- Static build with zero runtime dependencies: 929 KB
+- 100% test pass rate on all tested versions
+- Comprehensive documentation and test scripts
 
-**Files built and tested:** 24/24 ✅
-**Test pass rate:** 100%
-**Documentation:** Complete
+**Documentation:**
+- ✅ README.md - This file (updated with test results)
+- ✅ TEST_RESULTS.md - Detailed test analysis
+- ✅ CLAUDE.md - Development guidelines
+- ✅ Multiple test scripts for automated verification
 
 ## References
 
