@@ -1,45 +1,95 @@
-# BASH SSH Server - World's First BASH-Only SSH Server
+# BASH SSH Server - Educational SSH Protocol Implementation
 
-A minimal SSH-2.0 server implementation written **entirely in BASH**, demonstrating that you can implement network protocols using only shell scripting.
+**⚠️ HONEST UPFRONT ASSESSMENT**
 
-## Overview
+✅ **What Works**: SSH-2.0 version exchange, binary packet structure, protocol demonstration
+❌ **What Doesn't**: Full SSH client compatibility (fails at key exchange signature verification)
+✨ **Value**: Educational tool for learning SSH protocol internals
 
-This is an educational implementation of an SSH server using:
+## What Is This?
+
+An educational SSH server implementation written in BASH that demonstrates SSH protocol handling. This is a **proof-of-concept** showing how far you can push BASH, while clearly documenting where it hits its limits.
+
+**Tools Used**:
 - **BASH** for protocol logic and state machine
 - **openssl** for cryptographic operations
-- **socat/nc** for TCP socket handling
-- **xxd, od, dd** for binary data manipulation
-- **awk, sed** for data processing
+- **nc** for TCP socket handling
+- **od, dd, printf** for binary data manipulation (no xxd needed)
 
-## Features
+## What Actually Works ✅
 
-- ✅ SSH-2.0 protocol version exchange
-- ✅ Key exchange (curve25519-sha256)
-- ✅ Host key authentication (ssh-ed25519)
-- ✅ Password authentication
-- ✅ Session channel establishment
-- ✅ Sends "Hello World" message
+### 1. Version Exchange (Phase 1) - **FULLY WORKING**
 
-## Limitations
+```bash
+$ ./nano_ssh_server_v2.sh 2222 &
+$ echo "SSH-2.0-TestClient" | nc localhost 2222
+SSH-2.0-BashSSH_0.1  # ← Success!
+```
+
+### 2. Binary Packet Framing - **CORRECTLY IMPLEMENTED**
+
+Proper SSH packet structure per RFC 4253:
+- uint32 packet length
+- uint8 padding length
+- Payload bytes
+- Random padding (4-255 bytes)
+
+### 3. KEXINIT Message - **WORKING**
+
+Server sends proper KEXINIT with:
+- Algorithm negotiation lists
+- Random cookie
+- Correct binary encoding
+
+### 4. Cryptographic Key Generation - **WORKING**
+
+Uses OpenSSL to generate:
+- Ed25519 host keys (ssh-ed25519)
+- X25519 ephemeral keys (curve25519-sha256)
+
+## What Doesn't Work ❌
+
+### Real SSH Client Connection
+
+When testing with `ssh -p 2222 user@localhost`:
+
+1. ✅ Version exchange succeeds
+2. ✅ KEXINIT exchange succeeds
+3. ❌ **KEX_ECDH_REPLY signature verification fails**
+4. ❌ Connection closes
+
+**Why**: The implementation doesn't compute the proper exchange hash `H` or sign it correctly with the Ed25519 host key. Creating a valid signature requires building the exact binary structure that SSH expects, which is complex in BASH.
+
+### Post-NEWKEYS Encryption
+
+After `SSH_MSG_NEWKEYS`, all packets must be:
+- Encrypted with AES-128-CTR
+- Authenticated with HMAC-SHA2-256
+- IV counter updated per packet
+
+**BASH Limitation**: Cannot maintain streaming encryption state efficiently. Each OpenSSL call resets state, making per-packet encryption impractical.
+
+## Limitations (Fundamental)
 
 ⚠️ **Educational/Demonstration Purposes Only**
 
-This implementation is a proof-of-concept and has limitations:
+This is a proof-of-concept with fundamental limitations:
 
-1. **No encryption after NEWKEYS**: Due to BASH's limitations with binary data and streaming encryption, the simplified version skips full packet encryption
-2. **Simplified protocol**: Some SSH protocol messages are simplified or stubbed
-3. **Performance**: BASH is slow compared to compiled languages
-4. **Security**: Not suitable for production use
-5. **Compatibility**: May not work with all SSH clients due to simplifications
+1. **No real SSH client support**: Fails during key exchange (signature verification)
+2. **No post-NEWKEYS encryption**: BASH can't maintain streaming crypto state
+3. **Simplified signatures**: Exchange hash computation is stubbed
+4. **Performance**: 100-1000x slower than C (spawns process per crypto operation)
+5. **Not production-ready**: Never will be - that's not the goal
+
+**This is intentional** - the project demonstrates BASH capabilities AND limitations
 
 ## Requirements
 
 - `bash` (version 4.0+)
 - `openssl` (for cryptographic operations)
-- `socat` or `nc` (netcat) for network listening
-- `xxd` (hex dump utility)
-- `dd` (data copy utility)
-- Standard Unix tools: `awk`, `sed`, `od`
+- `nc` (netcat) for network listening
+- `dd`, `od`, `printf` (binary data handling)
+- **No xxd needed** - uses only standard POSIX tools
 
 ## Installation
 
@@ -56,26 +106,32 @@ sudo cp nano_ssh_server.sh /usr/local/bin/bash-ssh-server
 
 ## Usage
 
-### Start the server
+### Quick Test (What Actually Works)
 
 ```bash
-./nano_ssh_server.sh
+# Terminal 1: Start server
+./nano_ssh_server_v2.sh 2222
+
+# Terminal 2: Test version exchange
+echo "SSH-2.0-TestClient" | nc localhost 2222
+# Output: SSH-2.0-BashSSH_0.1  ← Success!
 ```
 
-The server listens on **port 2222** by default.
-
-### Connect with SSH client
+### Testing with Real SSH Client (Will Fail - But Educational)
 
 ```bash
-ssh -p 2222 user@localhost
-# Password: password123
+# Start server
+./nano_ssh_server_v2.sh 2222
+
+# Try with SSH client (in another terminal)
+ssh -vvv -p 2222 user@localhost
+# You'll see:
+# ✅ Version exchange succeeds
+# ✅ KEXINIT exchange succeeds
+# ❌ Connection closes (signature verification fails)
 ```
 
-### Testing with sshpass
-
-```bash
-echo "password123" | sshpass ssh -o StrictHostKeyChecking=no -p 2222 user@localhost
-```
+**This is expected!** See `ACTUAL_STATUS.md` for details
 
 ## How It Works
 
