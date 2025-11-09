@@ -100,6 +100,11 @@ connect-auto:
     @echo "Connecting to SSH server on port 2222 (automated)..."
     @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost
 
+# Test all server versions with real SSH client (using sshpass)
+test-all-sshpass:
+    @echo "Testing all versions with real SSH client..."
+    @./test_ssh_versions_final.sh
+
 # Show binary sizes for all versions
 size-report:
     @echo "======================================"

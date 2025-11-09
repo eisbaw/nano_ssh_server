@@ -12,7 +12,7 @@ CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
          -fshort-enums -fomit-frame-pointer -ffast-math -fno-math-errno \
          -fvisibility=hidden -Wno-unused-result -fno-builtin -fno-plt \
          -D_POSIX_C_SOURCE=200809L
-LDFLAGS = -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
+LDFLAGS = -lsodium -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr
 
 SRCS = main.c f25519.c fprime.c ed25519.c edsign.c sha512.c

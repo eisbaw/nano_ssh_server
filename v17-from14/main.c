@@ -1783,7 +1783,12 @@ int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
-
+                            
+    /* Initialize libsodium */
+    if (sodium_init() < 0) {
+        return 1;
+    }
+    
     /* Generate Ed25519 host key pair */
     crypto_sign_keypair(host_public_key, host_private_key);
     
