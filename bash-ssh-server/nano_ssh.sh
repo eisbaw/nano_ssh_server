@@ -42,6 +42,19 @@ SHARED_SECRET=""
 EXCHANGE_HASH=""
 SESSION_ID=""
 
+# Encryption state (set after NEWKEYS)
+# RFC 4253: Encryption is asymmetric - each direction activates independently
+ENCRYPTION_S2C_ENABLED=0  # Server-to-client (outgoing) - enabled after WE send NEWKEYS
+ENCRYPTION_C2S_ENABLED=0  # Client-to-server (incoming) - enabled after WE receive client's NEWKEYS
+ENCRYPTION_KEY_C2S=""
+ENCRYPTION_KEY_S2C=""
+IV_C2S=""
+IV_S2C=""
+MAC_KEY_C2S=""
+MAC_KEY_S2C=""
+SEQUENCE_NUM_C2S=0
+SEQUENCE_NUM_S2C=0
+
 # Temporary directory for keys and state
 TMPDIR=$(mktemp -d /tmp/bash-ssh.XXXXXX)
 trap "rm -rf $TMPDIR" EXIT
@@ -114,29 +127,82 @@ read_ssh_packet() {
         return 1
     fi
 
-    local padding_len_hex=$(read_bytes 1)
-    if [ -z "$padding_len_hex" ]; then
-        log "Connection closed (no padding_len)"
-        return 1
+    if [ $ENCRYPTION_C2S_ENABLED -eq 1 ]; then
+        log "Reading ENCRYPTED packet: packet_len=$packet_len, seq=$SEQUENCE_NUM_C2S"
+
+        # Read encrypted data
+        local encrypted=$(read_bytes $packet_len)
+        if [ -z "$encrypted" ]; then
+            log "Connection closed (no encrypted data)"
+            return 1
+        fi
+
+        # Read MAC (32 bytes)
+        local mac_received=$(read_bytes 32)
+        if [ -z "$mac_received" ]; then
+            log "Connection closed (no MAC)"
+            return 1
+        fi
+
+        # Verify MAC
+        local mac_input=$(printf "%08x" $SEQUENCE_NUM_C2S)$(printf "%08x" $packet_len)${encrypted}
+        local mac_expected=$(compute_hmac "$mac_input" "$MAC_KEY_C2S")
+
+        if [ "${mac_received}" != "${mac_expected:0:64}" ]; then
+            log "MAC verification failed!"
+            log "  Expected: ${mac_expected:0:64}"
+            log "  Received: ${mac_received}"
+            return 1
+        fi
+
+        # Decrypt data
+        local decrypted=$(decrypt_aes_ctr "$encrypted" "$ENCRYPTION_KEY_C2S" "$IV_C2S")
+
+        # Parse decrypted packet
+        local padding_len=$((16#${decrypted:0:2}))
+        local payload_len=$((packet_len - padding_len - 1))
+        local payload="${decrypted:2:$((payload_len * 2))}"
+
+        # Extract message type
+        if [ ${#payload} -lt 2 ]; then
+            log "Invalid payload (too short)"
+            return 1
+        fi
+        local msg_type=$((16#${payload:0:2}))
+        local msg_data="${payload:2}"
+
+        log "Received ENCRYPTED packet: type=$msg_type, payload_len=$payload_len"
+
+        # Increment sequence number
+        SEQUENCE_NUM_C2S=$((SEQUENCE_NUM_C2S + 1))
+
+        echo "$msg_type:$msg_data"
+    else
+        # Plaintext mode (original code)
+        local padding_len_hex=$(read_bytes 1)
+        if [ -z "$padding_len_hex" ]; then
+            log "Connection closed (no padding_len)"
+            return 1
+        fi
+        local padding_len=$((16#$padding_len_hex))
+        local payload_len=$((packet_len - padding_len - 1))
+
+        local payload=$(read_bytes $payload_len)
+        local padding=$(read_bytes $padding_len)
+
+        # Extract message type (first byte of payload)
+        if [ ${#payload} -lt 2 ]; then
+            log "Invalid payload (too short)"
+            return 1
+        fi
+        local msg_type=$((16#${payload:0:2}))
+        local msg_data="${payload:2}"
+
+        log "Received plaintext packet: type=$msg_type, payload_len=$payload_len, packet_len=$packet_len"
+        log "  Payload hex (first 40 chars): ${payload:0:40}..."
+
+        echo "$msg_type:$msg_data"
     fi
-    local padding_len=$((16#$padding_len_hex))
-    local payload_len=$((packet_len - padding_len - 1))
-
-    local payload=$(read_bytes $payload_len)
-    local padding=$(read_bytes $padding_len)
-
-    # Extract message type (first byte of payload)
-    if [ ${#payload} -lt 2 ]; then
-        log "Invalid payload (too short)"
-        return 1
-    fi
-    local msg_type=$((16#${payload:0:2}))
-    local msg_data="${payload:2}"
-
-    log "Received SSH packet: type=$msg_type, payload_len=$payload_len, packet_len=$packet_len"
-    log "  Payload hex (first 40 chars): ${payload:0:40}..."
-
-    echo "$msg_type:$msg_data"
 }
 
 # Write an SSH packet
@@ -148,8 +214,12 @@ write_ssh_packet() {
     local full_payload=$(printf "%02x" $msg_type)${payload_hex}
     local payload_len=$((${#full_payload} / 2))
 
-    # Calculate padding (minimum 4 bytes, block size 8)
-    local block_size=8
+    # Calculate padding (minimum 4 bytes, block size 16 for AES)
+    local block_size=16
+    if [ $ENCRYPTION_S2C_ENABLED -eq 0 ]; then
+        block_size=8  # Unencrypted uses block size 8
+    fi
+
     local padding_len=$(( (block_size - ((payload_len + 5) % block_size)) % block_size ))
     if [ $padding_len -lt 4 ]; then
         padding_len=$((padding_len + block_size))
@@ -161,14 +231,41 @@ write_ssh_packet() {
     # packet_length = padding_length + payload + padding
     local packet_len=$((1 + payload_len + padding_len))
 
-    log "Sending SSH packet: type=$msg_type, payload_len=$payload_len, padding=$padding_len, packet_len=$packet_len"
-    log "  Packet hex: $(printf "%08x" $packet_len)$(printf "%02x" $padding_len)${full_payload:0:40}..."
+    if [ $ENCRYPTION_S2C_ENABLED -eq 1 ]; then
+        log "Sending ENCRYPTED packet: type=$msg_type, payload_len=$payload_len, seq=$SEQUENCE_NUM_S2C"
 
-    # Write packet
-    write_uint32 $packet_len
-    printf "%02x" $padding_len | xxd -r -p
-    hex2bin "$full_payload"
-    hex2bin "$padding"
+        # Build data to encrypt: padding_length + payload + padding
+        local data_to_encrypt=$(printf "%02x" $padding_len)${full_payload}${padding}
+
+        # Encrypt the data
+        local encrypted=$(encrypt_aes_ctr "$data_to_encrypt" "$ENCRYPTION_KEY_S2C" "$IV_S2C")
+
+        # Compute MAC over sequence_number + packet_length + encrypted_data
+        local mac_input=$(printf "%08x" $SEQUENCE_NUM_S2C)$(printf "%08x" $packet_len)${encrypted}
+        local mac=$(compute_hmac "$mac_input" "$MAC_KEY_S2C")
+
+        # Send: packet_length (plaintext) + encrypted_data + MAC (first 32 bytes)
+        write_uint32 $packet_len
+        hex2bin "$encrypted"
+        hex2bin "${mac:0:64}"  # 32 bytes = 64 hex chars
+
+        # Increment sequence number
+        SEQUENCE_NUM_S2C=$((SEQUENCE_NUM_S2C + 1))
+    else
+        log "Sending plaintext packet: type=$msg_type, payload_len=$payload_len"
+        log "  Packet hex: $(printf "%08x" $packet_len)$(printf "%02x" $padding_len)${full_payload:0:40}..."
+
+        # Write unencrypted packet
+        log "DEBUG: Writing packet_len..."
+        write_uint32 $packet_len
+        log "DEBUG: Writing padding_len..."
+        printf "%02x" $padding_len | xxd -r -p
+        log "DEBUG: Writing payload..."
+        hex2bin "$full_payload"
+        log "DEBUG: Writing padding..."
+        hex2bin "$padding"
+        log "DEBUG: Packet write complete"
+    fi
 }
 
 # ============================================================================
@@ -223,6 +320,69 @@ sign_data() {
 sha256() {
     local data_hex="$1"
     hex2bin "$data_hex" | openssl dgst -sha256 -binary | bin2hex
+}
+
+# ============================================================================
+# ENCRYPTION FUNCTIONS
+# ============================================================================
+
+# Derive encryption keys from shared secret (RFC 4253 Section 7.2)
+derive_keys() {
+    log "Deriving encryption keys..."
+
+    # Helper to derive one key: HASH(K || H || letter || session_id)
+    derive_key() {
+        local letter="$1"
+        local letter_hex=$(printf "%s" "$letter" | xxd -p)
+        local data="${SHARED_SECRET}${EXCHANGE_HASH}${letter_hex}${SESSION_ID}"
+        sha256 "$data"
+    }
+
+    # Derive all 6 keys
+    IV_C2S=$(derive_key "A")
+    IV_S2C=$(derive_key "B")
+    ENCRYPTION_KEY_C2S=$(derive_key "C")
+    ENCRYPTION_KEY_S2C=$(derive_key "D")
+    MAC_KEY_C2S=$(derive_key "E")
+    MAC_KEY_S2C=$(derive_key "F")
+
+    # For AES-128, we only need 16 bytes (32 hex chars)
+    ENCRYPTION_KEY_C2S="${ENCRYPTION_KEY_C2S:0:32}"
+    ENCRYPTION_KEY_S2C="${ENCRYPTION_KEY_S2C:0:32}"
+
+    log "Keys derived successfully"
+    log "  ENC_KEY_S2C: ${ENCRYPTION_KEY_S2C}"
+    log "  IV_S2C: ${IV_S2C:0:32}..."
+    log "  MAC_KEY_S2C: ${MAC_KEY_S2C:0:32}..."
+}
+
+# Compute HMAC-SHA2-256
+compute_hmac() {
+    local data_hex="$1"
+    local key_hex="$2"
+
+    hex2bin "$data_hex" | \
+        openssl dgst -sha256 -mac HMAC -macopt hexkey:$key_hex -binary | bin2hex
+}
+
+# Encrypt data with AES-128-CTR (simplified - no IV increment for now)
+encrypt_aes_ctr() {
+    local plaintext_hex="$1"
+    local key_hex="$2"
+    local iv_hex="$3"
+
+    hex2bin "$plaintext_hex" | \
+        openssl enc -aes-128-ctr -K "$key_hex" -iv "$iv_hex" -nopad 2>/dev/null | bin2hex
+}
+
+# Decrypt data with AES-128-CTR
+decrypt_aes_ctr() {
+    local ciphertext_hex="$1"
+    local key_hex="$2"
+    local iv_hex="$3"
+
+    # AES-CTR encryption and decryption are the same operation
+    encrypt_aes_ctr "$ciphertext_hex" "$key_hex" "$iv_hex"
 }
 
 # ============================================================================
@@ -357,6 +517,9 @@ handle_ecdh_init() {
 
     log "Exchange hash: ${EXCHANGE_HASH:0:16}..."
 
+    # Derive encryption keys NOW (before sending NEWKEYS)
+    derive_keys
+
     # Sign the exchange hash
     local signature=$(sign_data "$EXCHANGE_HASH")
     log "Signature: ${signature:0:16}..."
@@ -375,9 +538,32 @@ handle_ecdh_init() {
     reply="${reply}$(printf "%08x" $((${#sig_blob} / 2)))${sig_blob}"
 
     write_ssh_packet $SSH_MSG_KEX_ECDH_REPLY "$reply"
+    log "DEBUG: About to send NEWKEYS"
 
-    # Send NEWKEYS
+    # Send NEWKEYS (still plaintext)
     write_ssh_packet $SSH_MSG_NEWKEYS ""
+    log "DEBUG: NEWKEYS sent successfully"
+
+    # RFC 4253 Section 7.3: Enable encryption for OUTGOING packets immediately after sending NEWKEYS
+    ENCRYPTION_S2C_ENABLED=1
+    log "S2C encryption ENABLED after sending NEWKEYS"
+
+    # IMMEDIATELY read client's NEWKEYS (still unencrypted!)
+    log "DEBUG: Reading client NEWKEYS..."
+    local client_newkeys=$(read_ssh_packet) || {
+        log "ERROR: Failed to read client NEWKEYS"
+        return 1
+    }
+    local client_msg_type="${client_newkeys%%:*}"
+
+    if [ "$client_msg_type" != "$SSH_MSG_NEWKEYS" ]; then
+        log "ERROR: Expected NEWKEYS (21), got $client_msg_type"
+        return 1
+    fi
+
+    log "Received client NEWKEYS - enabling C2S encryption"
+    ENCRYPTION_C2S_ENABLED=1
+    log "Full encryption enabled (both directions)"
 }
 
 # Handle service request
@@ -558,9 +744,6 @@ handle_connection() {
         case $msg_type in
             $SSH_MSG_KEXINIT)
                 handle_kexinit "$msg_data"
-                ;;
-            $SSH_MSG_NEWKEYS)
-                log "Received NEWKEYS from client"
                 ;;
             $SSH_MSG_KEX_ECDH_INIT)
                 handle_ecdh_init "$msg_data"
