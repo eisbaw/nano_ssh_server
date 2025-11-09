@@ -4,9 +4,13 @@ World's smallest SSH server for microcontrollers - a minimal SSH-2.0 implementat
 
 **Achievement: 64% size reduction (70 KB → 25 KB) with 5 fully working versions validated with real SSH clients.**
 
+**NEW! 🎉 BASH SSH Server**: We've also created a pure BASH implementation of an SSH server! See [bash-ssh-server/](bash-ssh-server/) for details.
+
 ## Quick Start
 
-### Prerequisites
+### C Implementations
+
+#### Prerequisites
 
 ```bash
 # Option 1: Using Nix (Recommended)
@@ -16,7 +20,7 @@ nix-shell
 sudo apt-get install gcc make just openssh-client libsodium-dev valgrind
 ```
 
-### Build and Run
+#### Build and Run
 
 ```bash
 # Build any version (all working versions tested with real SSH clients)
@@ -38,6 +42,34 @@ just size-report           # Compare all binary sizes
 just test <version>        # Run tests
 just valgrind <version>    # Check for memory leaks
 ```
+
+### BASH Implementation (NEW!)
+
+```bash
+# Run the BASH SSH server (pure shell script!)
+just run-bash              # Start server on port 2222
+
+# Or run directly
+cd bash-ssh-server
+./nano_ssh.sh 2222
+
+# Connect from another terminal
+ssh -p 2222 user@localhost     # Password: password123
+
+# Test automatically
+just test-bash
+
+# Get info
+just info-bash
+```
+
+**Features:**
+- ✅ Full SSH-2.0 protocol in ~750 lines of BASH
+- ✅ Works with standard SSH clients
+- ✅ Educational and fun!
+- ⚠️ Requires: bash, xxd, openssl, bc, socat/nc
+
+See [bash-ssh-server/README.md](bash-ssh-server/README.md) for full details.
 
 ## Version Comparison & Binary Sizes
 

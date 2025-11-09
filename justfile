@@ -239,6 +239,52 @@ test-v14-static:
     @cat v14-static/server_test.log
     @echo ""
 
+# ============================================================================
+# BASH SSH Server Commands
+# ============================================================================
+
+# Run BASH SSH server (pure bash implementation!)
+run-bash PORT="2222":
+    @echo "Starting BASH SSH server on port {{PORT}}..."
+    @cd bash-ssh-server && ./nano_ssh.sh {{PORT}}
+
+# Test BASH SSH server with real SSH client
+test-bash:
+    @echo "Testing BASH SSH server..."
+    @cd bash-ssh-server && ./test_bash_ssh.sh
+
+# Show BASH SSH server info
+info-bash:
+    @echo "======================================"
+    @echo "BASH SSH Server"
+    @echo "======================================"
+    @echo ""
+    @echo "Location: bash-ssh-server/"
+    @echo "Script:   nano_ssh.sh (~750 lines of pure BASH)"
+    @echo ""
+    @echo "Features:"
+    @echo "  ✅ Full SSH-2.0 protocol"
+    @echo "  ✅ Curve25519 key exchange"
+    @echo "  ✅ Ed25519 host key"
+    @echo "  ✅ Password authentication"
+    @echo "  ✅ Works with standard SSH clients"
+    @echo ""
+    @echo "Dependencies:"
+    @echo "  - bash (shell interpreter)"
+    @echo "  - xxd (hex dump utility)"
+    @echo "  - openssl (crypto operations)"
+    @echo "  - bc (bignum calculator)"
+    @echo "  - socat or nc (TCP server)"
+    @echo ""
+    @echo "Usage:"
+    @echo "  just run-bash        # Start server"
+    @echo "  just test-bash       # Run automated test"
+    @echo "  just connect         # Connect with SSH client"
+    @echo ""
+    @wc -l bash-ssh-server/nano_ssh.sh | awk '{printf "Line count: %s\\n", $$1}'
+    @stat -c%s bash-ssh-server/nano_ssh.sh 2>/dev/null | awk '{printf "File size:  %s bytes\\n", $$1}' || stat -f%z bash-ssh-server/nano_ssh.sh 2>/dev/null | awk '{printf "File size:  %s bytes\\n", $$1}'
+    @echo ""
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"
@@ -249,6 +295,11 @@ help:
     @echo "  just connect              # Connect with SSH client"
     @echo "  just test v0-vanilla      # Run tests"
     @echo "  just size-report          # Compare binary sizes"
+    @echo ""
+    @echo "BASH SSH Server (NEW!):"
+    @echo "  just run-bash             # Run BASH implementation"
+    @echo "  just test-bash            # Test BASH server"
+    @echo "  just info-bash            # Show BASH server info"
     @echo ""
     @echo "Musl builds:"
     @echo "  just build-musl           # Build with musl (native, no Docker)"
