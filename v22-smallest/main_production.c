@@ -1360,7 +1360,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         failure_len += 4;
         write_uint32_be(open_failure + failure_len, 3);  /* SSH_OPEN_UNKNOWN_CHANNEL_TYPE */
         failure_len += 4;
-        failure_len += write_string(open_failure + failure_len, "Unknown channel type", 20);
+        failure_len += write_string(open_failure + failure_len, "", 0);  /* Shortened error */
         failure_len += write_string(open_failure + failure_len, "", 0);  /* language tag */
 
         send_packet(client_fd, open_failure, failure_len);
