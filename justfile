@@ -1,6 +1,9 @@
 # Justfile for Nano SSH Server
 # Task automation interface - ALWAYS use this instead of raw commands
 
+# Use bash for better shell compatibility
+set shell := ["bash", "-c"]
+
 # Default recipe - show help
 default:
     @just --list
@@ -113,11 +116,11 @@ size-report:
     @printf "%-20s %15s %15s\n" "Version" "Size (bytes)" "Size (KB)"
     @echo "--------------------------------------"
     @for dir in v*-*/; do \
-        if [ -f "$$dir/nano_ssh_server" ]; then \
+        if [ -f "$${dir}/nano_ssh_server" ]; then \
             version=$${dir%/}; \
-            size=$$(stat -c%s "$$dir/nano_ssh_server" 2>/dev/null || stat -f%z "$$dir/nano_ssh_server" 2>/dev/null); \
-            kb=$$(echo "scale=2; $$size/1024" | bc); \
-            printf "%-20s %15s %15s\n" "$$version" "$$size" "$$kb"; \
+            size=$$(stat -c%s "$${dir}/nano_ssh_server" 2>/dev/null || stat -f%z "$${dir}/nano_ssh_server" 2>/dev/null); \
+            kb=$$(echo "scale=2; $${size}/1024" | bc); \
+            printf "%-20s %15s %15s\n" "$${version}" "$${size}" "$${kb}"; \
         fi \
     done
     @echo "======================================"
