@@ -133,7 +133,8 @@ read_ssh_packet() {
     local msg_type=$((16#${payload:0:2}))
     local msg_data="${payload:2}"
 
-    log "Received SSH packet: type=$msg_type, payload_len=$payload_len"
+    log "Received SSH packet: type=$msg_type, payload_len=$payload_len, packet_len=$packet_len"
+    log "  Payload hex (first 40 chars): ${payload:0:40}..."
 
     echo "$msg_type:$msg_data"
 }
@@ -160,7 +161,8 @@ write_ssh_packet() {
     # packet_length = padding_length + payload + padding
     local packet_len=$((1 + payload_len + padding_len))
 
-    log "Sending SSH packet: type=$msg_type, payload_len=$payload_len, padding=$padding_len"
+    log "Sending SSH packet: type=$msg_type, payload_len=$payload_len, padding=$padding_len, packet_len=$packet_len"
+    log "  Packet hex: $(printf "%08x" $packet_len)$(printf "%02x" $padding_len)${full_payload:0:40}..."
 
     # Write packet
     write_uint32 $packet_len
@@ -383,16 +385,18 @@ handle_service_request() {
     local payload_hex="$1"
 
     log "Handling SERVICE_REQUEST..."
+    log "  Payload hex: ${payload_hex:0:60}..."
 
     # Read service name
     local service_len=$((16#${payload_hex:0:8}))
     local service_hex="${payload_hex:8:$((service_len * 2))}"
     local service=$(hex2bin "$service_hex")
 
-    log "Service requested: $service"
+    log "Service requested: $service (len=$service_len)"
 
     # Send SERVICE_ACCEPT
     local accept_payload=$(printf "%08x" ${#service})$(echo -n "$service" | bin2hex)
+    log "  Accept payload hex: $accept_payload"
     write_ssh_packet $SSH_MSG_SERVICE_ACCEPT "$accept_payload"
 }
 
