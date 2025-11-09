@@ -7,7 +7,7 @@
 # Usage: ./nano_ssh.sh [port]
 #
 
-set -euo pipefail
+set -uo pipefail
 
 # Configuration
 PORT="${1:-2222}"
@@ -78,6 +78,10 @@ read_bytes() {
 # Read uint32 (4 bytes, big-endian)
 read_uint32() {
     local hex=$(read_bytes 4)
+    if [ -z "$hex" ]; then
+        echo "0"
+        return 1
+    fi
     echo $((16#$hex))
 }
 
@@ -105,7 +109,16 @@ write_ssh_string() {
 # Returns: message type and payload as hex
 read_ssh_packet() {
     local packet_len=$(read_uint32)
+    if [ $packet_len -eq 0 ]; then
+        log "Connection closed (packet_len=0)"
+        return 1
+    fi
+
     local padding_len_hex=$(read_bytes 1)
+    if [ -z "$padding_len_hex" ]; then
+        log "Connection closed (no padding_len)"
+        return 1
+    fi
     local padding_len=$((16#$padding_len_hex))
     local payload_len=$((packet_len - padding_len - 1))
 
@@ -113,6 +126,10 @@ read_ssh_packet() {
     local padding=$(read_bytes $padding_len)
 
     # Extract message type (first byte of payload)
+    if [ ${#payload} -lt 2 ]; then
+        log "Invalid payload (too short)"
+        return 1
+    fi
     local msg_type=$((16#${payload:0:2}))
     local msg_data="${payload:2}"
 
@@ -527,7 +544,10 @@ handle_connection() {
     local channel_open=0
 
     while true; do
-        local packet=$(read_ssh_packet)
+        local packet=$(read_ssh_packet) || {
+            log "Failed to read packet, connection closed"
+            break
+        }
         local msg_type="${packet%%:*}"
         local msg_data="${packet#*:}"
 
