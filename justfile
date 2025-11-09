@@ -290,6 +290,55 @@ test-v21-static:
     @echo "✅ v21-static test complete!"
     @echo ""
 
+# Build v17-static2 with musl (requires musl-tools)
+build-v17-static2:
+    @echo "Building v17-static2 with musl libc (statically linked)..."
+    @echo "This requires musl-tools (apt-get install musl-tools)"
+    @echo ""
+    @if [ ! -d "v17-static2" ]; then \
+        echo "Error: v17-static2 directory does not exist"; \
+        exit 1; \
+    fi
+    @cd v17-static2 && make
+    @echo ""
+    @echo "✅ v17-static2 built successfully!"
+    @echo ""
+    @echo "Binary comparison:"
+    @echo "  v17-static2 (musl): $(stat -c%s v17-static2/nano_ssh_server 2>/dev/null || echo '?') bytes (~70 KB)"
+    @echo "  v17-from14 (dyn):   $(stat -c%s v17-from14/nano_ssh_server_production 2>/dev/null || echo '?') bytes (~47 KB)"
+    @echo ""
+
+# Run v17-static2
+run-v17-static2:
+    @echo "Starting v17-static2 (musl) on port 2222..."
+    @if [ ! -f "v17-static2/nano_ssh_server" ]; then \
+        echo "Error: v17-static2/nano_ssh_server not found. Run 'just build-v17-static2' first"; \
+        exit 1; \
+    fi
+    @cd v17-static2 && ./nano_ssh_server
+
+# Test v17-static2 with real SSH client
+test-v17-static2:
+    @echo "Testing v17-static2 with real SSH client..."
+    @if [ ! -f "v17-static2/nano_ssh_server" ]; then \
+        echo "Error: v17-static2/nano_ssh_server not found. Run 'just build-v17-static2' first"; \
+        exit 1; \
+    fi
+    @echo ""
+    @echo "Starting v17-static2 server in background..."
+    @cd v17-static2 && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
+    @sleep 2
+    @echo ""
+    @echo "Testing SSH connection..."
+    @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost 2>&1 || true
+    @echo ""
+    @echo "Stopping server..."
+    @kill $$(cat v17-static2/server.pid) 2>/dev/null || true
+    @rm -f v17-static2/server.pid
+    @echo ""
+    @echo "✅ v17-static2 test complete!"
+    @echo ""
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"

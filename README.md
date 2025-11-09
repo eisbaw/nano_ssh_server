@@ -2,7 +2,7 @@
 
 World's smallest SSH server for microcontrollers - a minimal SSH-2.0 implementation that works with standard Linux SSH clients.
 
-**Achievement: 93% size reduction (718 KB static → 53 KB musl static) with 6 fully working versions validated with real SSH clients.**
+**Achievement: 93% size reduction (718 KB static → 53 KB musl static) with 7 fully working versions validated with real SSH clients.**
 
 **Latest: v21-static proves musl is 13.5x smaller than glibc for static builds!**
 
@@ -23,6 +23,7 @@ sudo apt-get install gcc make just openssh-client libsodium-dev valgrind
 ```bash
 # Build any version (all working versions tested with real SSH clients)
 just build v21-static      # ⭐ BEST: 53 KB, musl static (no deps!)
+just build v17-static2     # Good: 70 KB, musl static (v17-from14 as static)
 just build v20-opt         # Good: 41 KB, latest optimized
 just build v19-donna       # Good: 41 KB, Curve25519-donna
 just build v17-from14      # Smallest dynamic: 25 KB, custom crypto
@@ -44,13 +45,14 @@ just valgrind <version>    # Check for memory leaks
 
 ## Version Comparison & Binary Sizes
 
-**6 fully working versions validated with real SSH clients.** All versions tested with `sshpass` and standard OpenSSH clients.
+**7 fully working versions validated with real SSH clients.** All versions tested with `sshpass` and standard OpenSSH clients.
 
 ### 🏆 Working Versions (100% Tested)
 
 | Version | Size | Dependencies | Use Case | Status |
 |---------|------|--------------|----------|--------|
 | **v21-static** | **53 KB** | **(none - musl static)** | ⭐ **BEST: Tiny + portable** | ✅ PASS |
+| **v17-static2** | **70 KB** | **(none - musl static)** | v17-from14 as musl static | ✅ PASS |
 | **v20-opt** | **41 KB** | libc (dynamic) | Smallest dynamic build | ✅ PASS |
 | **v19-donna** | **41 KB** | libc (dynamic) | Curve25519-donna implementation | ✅ PASS |
 | **v17-from14** | **25 KB** | libc (dynamic) | Ultra-minimal dynamic | ✅ PASS |
@@ -64,6 +66,7 @@ v0-vanilla    ██████████████████████
 v17-from14    ██████████████ 25 KB   ✅ Smallest dynamic
 v20-opt       ██████████████████████ 41 KB   ✅ Optimized dynamic
 v21-static    ███████████████████████████ 53 KB   ⭐ ✅ RECOMMENDED (musl static!)
+v17-static2   ████████████████████████████████████████████████ 70 KB   ✅ v17-from14 musl static
 v12-static    ████████████████████████████████████████████████████████ 718 KB   ❌ glibc bloat
 ```
 
