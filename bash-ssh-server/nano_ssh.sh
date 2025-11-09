@@ -554,8 +554,8 @@ handle_connection() {
         case $msg_type in
             $SSH_MSG_KEXINIT)
                 handle_kexinit "$msg_data"
-                # Read NEWKEYS from client
-                read_ssh_packet > /dev/null
+                ;;
+            $SSH_MSG_NEWKEYS)
                 log "Received NEWKEYS from client"
                 ;;
             $SSH_MSG_KEX_ECDH_INIT)
@@ -600,7 +600,7 @@ main() {
     # Use socat for TCP server
     if command -v socat &> /dev/null; then
         log "Using socat for server socket"
-        socat TCP-LISTEN:$PORT,reuseaddr,fork SYSTEM:"bash '$0' --handle-connection" &
+        socat TCP-LISTEN:$PORT,reuseaddr,fork,max-children=10 EXEC:"bash $0 --handle-connection" &
         SERVER_PID=$!
         log "Server PID: $SERVER_PID"
         log "Server ready! Connect with: ssh -p $PORT user@localhost"
