@@ -885,11 +885,16 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr) {
     ssize_t n;
     int i, version_len;
 
+    fprintf(stderr, "\n=== NEW CLIENT CONNECTION ===\n");
+    fprintf(stderr, "Client FD: %d\n", client_fd);
+
     (void)client_addr;  /* Unused in minimal version */
 
     /* ======================
      * Phase 1.2: Version Exchange
      * ====================== */
+
+    fprintf(stderr, "Sending server version string...\n");
 
     /* Send server version string (plaintext, ends with \r\n) */
     server_version_line[0] = 'S'; server_version_line[1] = 'S'; server_version_line[2] = 'H';
@@ -1778,12 +1783,18 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Initializing RSA-2048 host key...\n");
     init_rsa_host_key();
     fprintf(stderr, "RSA host key initialized\n\n");
-    
+
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);
     if (listen_fd < 0) {
+        fprintf(stderr, "ERROR: Failed to create server socket on port %d\n", SERVER_PORT);
         return 1;
     }
+
+    fprintf(stderr, "Nano SSH Server listening on 0.0.0.0:%d\n", SERVER_PORT);
+    fprintf(stderr, "Using algorithms: KEX=%s, HostKey=%s, Cipher=%s, MAC=%s\n",
+            KEX_ALGORITHM, HOST_KEY_ALGORITHM, ENCRYPTION_ALGORITHM, MAC_ALGORITHM);
+    fprintf(stderr, "Waiting for connections...\n\n");
     
     /* Main server loop - accept connections */
     
