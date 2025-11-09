@@ -1147,7 +1147,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         uint8_t sig_blob[512];  /* RSA signature is 256 bytes + overhead */
         size_t sig_blob_len = 0;
         sig_blob_len += write_string(sig_blob, "rsa-sha2-256", 12);
-        sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 256);
+        sig_blob_len += write_mpint(sig_blob + sig_blob_len, signature, 256);
         kex_reply_len += write_string(kex_reply + kex_reply_len,
                                       (const char *)sig_blob, sig_blob_len);
     }
