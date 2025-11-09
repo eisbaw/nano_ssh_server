@@ -253,18 +253,21 @@ write_ssh_packet() {
         SEQUENCE_NUM_S2C=$((SEQUENCE_NUM_S2C + 1))
     else
         log "Sending plaintext packet: type=$msg_type, payload_len=$payload_len"
-        log "  Packet hex: $(printf "%08x" $packet_len)$(printf "%02x" $padding_len)${full_payload:0:40}..."
 
-        # Write unencrypted packet
-        log "DEBUG: Writing packet_len..."
-        write_uint32 $packet_len
-        log "DEBUG: Writing padding_len..."
-        printf "%02x" $padding_len | xxd -r -p
-        log "DEBUG: Writing payload..."
-        hex2bin "$full_payload"
-        log "DEBUG: Writing padding..."
-        hex2bin "$padding"
-        log "DEBUG: Packet write complete"
+        # Build complete packet as single hex string for atomic write
+        local complete_packet=""
+        complete_packet="${complete_packet}$(printf "%08x" $packet_len)"
+        complete_packet="${complete_packet}$(printf "%02x" $padding_len)"
+        complete_packet="${complete_packet}${full_payload}"
+        complete_packet="${complete_packet}${padding}"
+
+        log "  Complete packet hex (first 60 chars): ${complete_packet:0:60}..."
+        log "  Packet structure: len=$packet_len, padding=$padding_len, total_hex_len=${#complete_packet}"
+
+        # Write entire packet as single atomic operation to avoid buffering issues
+        hex2bin "$complete_packet"
+
+        log "  Packet sent successfully"
     fi
 }
 
@@ -542,28 +545,26 @@ handle_ecdh_init() {
 
     # Send NEWKEYS (still plaintext)
     write_ssh_packet $SSH_MSG_NEWKEYS ""
-    log "DEBUG: NEWKEYS sent successfully"
 
-    # RFC 4253 Section 7.3: Enable encryption for OUTGOING packets immediately after sending NEWKEYS
+    # RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
+    # Enable S2C encryption immediately after sending NEWKEYS
     ENCRYPTION_S2C_ENABLED=1
-    log "S2C encryption ENABLED after sending NEWKEYS"
+    log "NEWKEYS sent - S2C encryption ENABLED for all outgoing packets"
 
-    # IMMEDIATELY read client's NEWKEYS (still unencrypted!)
-    log "DEBUG: Reading client NEWKEYS..."
-    local client_newkeys=$(read_ssh_packet) || {
-        log "ERROR: Failed to read client NEWKEYS"
-        return 1
-    }
+    # Wait for client's NEWKEYS (C implementation does this in same function)
+    log "Reading client NEWKEYS (expecting plaintext)..."
+    local client_newkeys=$(read_ssh_packet)
     local client_msg_type="${client_newkeys%%:*}"
 
     if [ "$client_msg_type" != "$SSH_MSG_NEWKEYS" ]; then
-        log "ERROR: Expected NEWKEYS (21), got $client_msg_type"
+        log "ERROR: Expected NEWKEYS (21) but got: $client_msg_type"
         return 1
     fi
 
-    log "Received client NEWKEYS - enabling C2S encryption"
+    # Enable C2S encryption after receiving client's NEWKEYS
     ENCRYPTION_C2S_ENABLED=1
-    log "Full encryption enabled (both directions)"
+    log "Client NEWKEYS received - C2S encryption ENABLED"
+    log "Full duplex encryption active (S2C=${ENCRYPTION_S2C_ENABLED}, C2S=${ENCRYPTION_C2S_ENABLED})"
 }
 
 # Handle service request
@@ -747,6 +748,7 @@ handle_connection() {
                 ;;
             $SSH_MSG_KEX_ECDH_INIT)
                 handle_ecdh_init "$msg_data"
+                # After handle_ecdh_init, encryption is fully enabled
                 ;;
             $SSH_MSG_SERVICE_REQUEST)
                 handle_service_request "$msg_data"
