@@ -1,12 +1,15 @@
 /*
- * Nano SSH Server - v14-crypto
- * Self-contained crypto: No external crypto libraries for symmetric crypto
+ * Nano SSH Server - v17-from14 (Hybrid: v14 protocol + v17 crypto)
+ * 100% independent from external crypto libraries!
  * - Custom AES-128-CTR implementation (no OpenSSL)
  * - Custom SHA-256 implementation
  * - Custom HMAC-SHA256 implementation
- * - Still using libsodium for: Curve25519, Ed25519, randombytes
+ * - Custom Curve25519 implementation (no libsodium)
+ * - c25519 Ed25519 implementation (no libsodium)
+ * - Custom CSPRNG using /dev/urandom (no libsodium)
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -14,7 +17,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sodium.h>
+#include "random_minimal.h"
+#include "curve25519_minimal.h"
+#include "edsign.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
 
@@ -114,14 +119,15 @@ typedef struct {
 static crypto_state_t encrypt_state_c2s = {0}, encrypt_state_s2c = {0};
 
 /*
- * Generate random bytes (libsodium provides this)
- * Already using: randombytes_buf() in send_packet()
+ * Generate random bytes
+ * Custom implementation using /dev/urandom
+ * Function: randombytes_buf(buf, size)
  */
 
 /*
  * Curve25519 key generation
  *
- * libsodium provides:
+ * Custom implementation (RFC 7748):
  * - crypto_scalarmult_base(public, private) - generate public from private
  * - crypto_scalarmult(shared, private, peer_public) - compute shared secret
  */
@@ -141,10 +147,10 @@ int compute_curve25519_shared(uint8_t *shared, const uint8_t *private_key, const
 /*
  * Ed25519 signing (for host key)
  *
- * libsodium provides:
- * - crypto_sign_keypair(public, private) - generate key pair
- * - crypto_sign_detached(sig, &siglen, msg, msglen, private) - sign message
- * - crypto_sign_verify_detached(sig, msg, msglen, public) - verify signature
+ * c25519 (public domain) provides:
+ * - edsign_sec_to_pub(public, secret) - derive public key from secret
+ * - edsign_sign(sig, pub, secret, msg, msglen) - sign message
+ * - edsign_verify(sig, pub, msg, msglen) - verify signature
  */
 
 /*
@@ -1096,10 +1102,11 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     memcpy(session_id, exchange_hash, 32);
 
     /* Sign exchange hash with host private key */
-    crypto_sign_detached(signature, &sig_len, exchange_hash, 32, host_private_key);
+    edsign_sign(signature, host_public_key, host_private_key, exchange_hash, 32);
+    sig_len = 64;  /* Ed25519 signatures are always 64 bytes */
 
     fprintf(stderr, "Signature: ");
-    for (size_t i = 0; i < sig_len; i++) fprintf(stderr, "%02x", signature[i]);
+    for (int i = 0; i < 64; i++) fprintf(stderr, "%02x", signature[i]);
     fprintf(stderr, "\n=================================\n\n");
     
     /* Build SSH_MSG_KEX_ECDH_REPLY */
@@ -1775,19 +1782,14 @@ int main(int argc, char *argv[]) {
     int client_fd;
     struct sockaddr_in client_addr;
     uint8_t host_public_key[32];
-    uint8_t host_private_key[64];
+    uint8_t host_private_key[32];  /* c25519 uses 32-byte private keys */
 
     (void)argc;
     (void)argv;
 
-                            
-    /* Initialize libsodium */
-    if (sodium_init() < 0) {
-        return 1;
-    }
-    
-    /* Generate Ed25519 host key pair */
-    crypto_sign_keypair(host_public_key, host_private_key);
+    /* Generate Ed25519 host key pair (no initialization needed) */
+    randombytes_buf(host_private_key, 32);
+    edsign_sec_to_pub(host_public_key, host_private_key);
     
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);

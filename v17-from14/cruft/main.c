@@ -1,12 +1,14 @@
 /*
- * Nano SSH Server - v14-crypto
- * Self-contained crypto: No external crypto libraries for symmetric crypto
+ * Nano SSH Server - v14-crypto protocol + v17 custom crypto
+ * 100% independent from external crypto libraries!
  * - Custom AES-128-CTR implementation (no OpenSSL)
  * - Custom SHA-256 implementation
  * - Custom HMAC-SHA256 implementation
- * - Still using libsodium for: Curve25519, Ed25519, randombytes
+ * - c25519 Curve25519, Ed25519 (no libsodium)
+ * - Custom randombytes (no libsodium)
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -14,7 +16,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sodium.h>
+#include "sodium_compat.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
 
@@ -1120,6 +1122,11 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         size_t sig_blob_len = 0;
         sig_blob_len += write_string(sig_blob, "ssh-ed25519", 11);
         sig_blob_len += write_string(sig_blob + sig_blob_len, (const char *)signature, 64);
+
+        fprintf(stderr, "sig_blob (%zu bytes): ", sig_blob_len);
+        for (size_t i = 0; i < sig_blob_len && i < 100; i++) fprintf(stderr, "%02x", sig_blob[i]);
+        fprintf(stderr, "\n");
+
         kex_reply_len += write_string(kex_reply + kex_reply_len,
                                       (const char *)sig_blob, sig_blob_len);
     }
@@ -1788,6 +1795,15 @@ int main(int argc, char *argv[]) {
     
     /* Generate Ed25519 host key pair */
     crypto_sign_keypair(host_public_key, host_private_key);
+
+    fprintf(stderr, "\n=== HOST KEY GENERATED ===\n");
+    fprintf(stderr, "Public key (32 bytes): ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_public_key[i]);
+    fprintf(stderr, "\nPrivate key [0:32]: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_private_key[i]);
+    fprintf(stderr, "\nPrivate key [32:64]: ");
+    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", host_private_key[32+i]);
+    fprintf(stderr, "\n========================\n\n");
     
     /* Create TCP server socket */
     listen_fd = create_server_socket(SERVER_PORT);

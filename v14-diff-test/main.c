@@ -1,26 +1,5 @@
-/*
- * Nano SSH Server - v14-crypto
- * Self-contained crypto: No external crypto libraries for symmetric crypto
- * - Custom AES-128-CTR implementation (no OpenSSL)
- * - Custom SHA-256 implementation
- * - Custom HMAC-SHA256 implementation
- * - Still using libsodium for: Curve25519, Ed25519, randombytes
- */
+#include "main_header.h"
 
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sodium.h>
-#include "aes128_minimal.h"
-#include "sha256_minimal.h"
-
-/* Forward declarations */
-ssize_t send_data(int fd, const void *buf, size_t len);
-ssize_t recv_data(int fd, void *buf, size_t len);
 
 /* Configuration */
 #define SERVER_PORT 2222

@@ -1,12 +1,15 @@
 /*
- * Nano SSH Server - v14-crypto
- * Self-contained crypto: No external crypto libraries for symmetric crypto
+ * Nano SSH Server - v17-final (Production)
+ * Hybrid crypto configuration - optimized for compatibility
  * - Custom AES-128-CTR implementation (no OpenSSL)
  * - Custom SHA-256 implementation
  * - Custom HMAC-SHA256 implementation
- * - Still using libsodium for: Curve25519, Ed25519, randombytes
+ * - c25519 Ed25519 (100% independent from libsodium!)
+ * - Custom random number generation (/dev/urandom)
+ * - libsodium Curve25519 (proven compatible)
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -14,7 +17,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sodium.h>
+#include "sodium_compat_production.h"
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
 
