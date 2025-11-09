@@ -242,6 +242,9 @@ nano_ssh_server/
 just build v15-crypto
 just test v15-crypto
 
+# Test all versions with real SSH client (automated with sshpass)
+just test-all-sshpass
+
 # Manual SSH test
 just run v15-crypto              # Terminal 1: Start server
 ssh -vvv -p 2222 user@localhost  # Terminal 2: Connect (password: password123)
@@ -252,7 +255,7 @@ just valgrind v15-crypto
 # Size comparison
 just size-report
 
-# Test all versions
+# Test all versions (unit tests)
 just test-all
 ```
 
