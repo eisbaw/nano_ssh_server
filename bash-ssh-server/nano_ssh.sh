@@ -369,6 +369,31 @@ sha256() {
     hex2bin "$data_hex" | openssl dgst -sha256 -binary | bin2hex
 }
 
+# Encode data as SSH mpint (RFC 4251 Section 5)
+# mpint: length (4 bytes) + data (with leading 0x00 if high bit set)
+encode_mpint() {
+    local data_hex="$1"
+
+    # Remove leading zero bytes
+    while [[ "$data_hex" =~ ^00 ]] && [[ ${#data_hex} -gt 2 ]]; do
+        data_hex="${data_hex:2}"
+    done
+
+    # Check if high bit is set (first byte >= 0x80)
+    local first_byte=$((16#${data_hex:0:2}))
+    if [ $first_byte -ge 128 ]; then
+        # Prepend 0x00 byte to keep number positive
+        local actual_data="00${data_hex}"
+    else
+        local actual_data="$data_hex"
+    fi
+
+    # Encode as length + data
+    local data_len=$((${#actual_data} / 2))
+    printf "%08x" $data_len
+    echo -n "$actual_data"
+}
+
 # ============================================================================
 # ENCRYPTION FUNCTIONS
 # ============================================================================
@@ -579,8 +604,8 @@ handle_ecdh_init() {
     # Q_S: server ephemeral public key
     local Q_S=$(cat "$TMPDIR/ephemeral_pubkey.hex")
 
-    # K: shared secret as mpint
-    local K_mpint=$(printf "%08x" 32)${SHARED_SECRET}
+    # K: shared secret as mpint (with proper encoding: strip leading zeros, add 0x00 if high bit set)
+    local K_mpint=$(encode_mpint "$SHARED_SECRET")
 
     # Build hash input (as SSH strings where appropriate)
     local hash_input=""
