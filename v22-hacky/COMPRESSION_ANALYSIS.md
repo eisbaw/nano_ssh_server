@@ -160,7 +160,7 @@ UPX uses **LZMA compression** which excels at:
 1. ✅ Use `objcopy` to strip sections (we're doing this)
 2. ✅ Use `-Oz` instead of `-Os` (we're doing this)
 3. ✅ Apply UPX compression (we're doing this)
-4. 🔸 Add `-fno-unroll-loops` (may save 1-2 KB)
+4. ✅ Add `-fno-unroll-loops` - **Already included in `-Oz`!** (no additional savings)
 
 **Medium Impact, Medium Risk:**
 5. 🔸 Replace crypto implementations with smaller ones
@@ -208,7 +208,23 @@ The compression analysis reveals that:
 
 **Verdict**: v22-hacky represents the practical limit of size optimization without major architectural changes or feature removal.
 
+## Update: Loop Unrolling Test
+
+**Test performed:** Added explicit `-fno-unroll-loops` flag to verify optimization opportunity.
+
+**Result:** **Zero size change** (54,168 bytes → 54,168 bytes)
+
+**Explanation:** The `-Oz` flag already disables loop unrolling by default:
+```
+$ musl-gcc -Q -Oz --help=optimizers | grep unroll
+  -funroll-loops              [disabled]
+  -funroll-all-loops          [disabled]
+```
+
+**Conclusion:** The compression analysis correctly identified repeated instruction patterns from loops, but `-Oz` already optimizes for this. No further gains from loop control flags.
+
 ---
 
 *Analysis performed: 2025-11-10*
 *Binary analyzed: v22-hacky (54,168 bytes → 25,972 bytes UPX)*
+*Loop unrolling test: 2025-11-10 (no change)*

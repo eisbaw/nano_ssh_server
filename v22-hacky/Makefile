@@ -11,6 +11,7 @@ CFLAGS = -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fwhole-program -fipa-pta -fno-common \
          -fmerge-constants -fstrict-aliasing -fstrict-overflow \
          -fdelete-null-pointer-checks -fno-stack-check \
+         -fno-unroll-loops \
          -D_POSIX_C_SOURCE=200809L -DNDEBUG -w
 LDFLAGS = -static -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro \
