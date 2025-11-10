@@ -438,9 +438,11 @@ read_packet_encrypted() {
     # AES-CTR is a stream cipher - we must decrypt in one pass!
     # Strategy: Read minimum needed first, then read more if needed
 
-    # Read minimum: 4 (enc length) + 32 (min packet) + 32 (MAC) = 68 bytes
-    # Use head instead of dd to avoid blocking
-    head -c 128 > "$WORKDIR/enc_buffer" 2>/dev/null
+    # Read minimum packet: read what's available without blocking indefinitely
+    # Strategy: Read incrementally, decrypt length field, then read rest
+
+    # Read first 36 bytes (4 len + 32 min packet + 32 MAC minimum)
+    dd bs=36 count=1 iflag=fullblock of="$WORKDIR/enc_buffer" 2>/dev/null || true
     local bytes_read=$(wc -c < "$WORKDIR/enc_buffer")
 
     log "DEBUG: Read $bytes_read encrypted bytes from stream"
@@ -482,7 +484,7 @@ read_packet_encrypted() {
     if [ $bytes_read -lt $total_needed ]; then
         # Need to read more
         local more_needed=$((total_needed - bytes_read))
-        head -c $more_needed >> "$WORKDIR/enc_buffer" 2>/dev/null
+        dd bs=1 count=$more_needed iflag=fullblock >> "$WORKDIR/enc_buffer" 2>/dev/null || true
 
         # Re-decrypt with complete data
         openssl enc -d -aes-128-ctr \
@@ -794,7 +796,9 @@ main() {
 
     if command -v socat >/dev/null 2>&1; then
         log "Using socat for TCP handling"
-        socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:"$0 --handle-session"
+        # Use absolute path for socat EXEC
+        local SCRIPT_PATH=$(readlink -f "$0")
+        socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:"bash $SCRIPT_PATH --handle-session"
     elif command -v nc >/dev/null 2>&1; then
         log "Using nc for TCP handling"
         local FIFO="/tmp/bash_ssh_fifo_$$"
