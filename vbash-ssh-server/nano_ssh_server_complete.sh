@@ -362,13 +362,11 @@ send_packet_encrypted() {
     } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_S2C" -binary \
       > "$WORKDIR/packet_mac"
 
-    # Compute IV for this packet
-    # In SSH AES-CTR: IV stays the same, counter continues from previous packet
-    # For stateless implementation: combine derived IV with sequence number
-    # Take first 12 bytes of derived IV and append 4-byte sequence number
-    local iv_prefix=$(echo -n "$IV_S2C" | head -c 24)  # First 96 bits (24 hex chars)
-    local seq_hex=$(printf "%08x" "$SEQ_NUM_S2C")       # 32-bit sequence
-    local current_iv="${iv_prefix}${seq_hex}"
+    # Use derived IV directly
+    # In SSH AES-CTR, the IV is used as-is for the first packet
+    # Subsequent packets continue from where the counter left off
+    # Since we're stateless (each packet separately), we use the same IV
+    local current_iv="$IV_S2C"
 
     # Encrypt packet with AES-128-CTR
     openssl enc -aes-128-ctr \
@@ -421,83 +419,93 @@ read_packet_unencrypted() {
 read_packet_encrypted() {
     local output_file="$1"
 
-    # For encrypted packets, we need to read enough data to get the length
-    # Read a block of data (we'll read max size and handle it)
-    # First, read into a buffer - let's read 16 bytes (one AES block) to get length safely
-    dd bs=1 count=16 of="$WORKDIR/enc_block1" 2>/dev/null
+    # AES-CTR is a stream cipher - we must decrypt in one pass!
+    # Strategy: Read a buffer, decrypt once, extract length, read more if needed
 
-    # Decrypt first block to get packet length
-    # Use same IV format as encryption: derived IV prefix + sequence number
-    local iv_prefix=$(echo -n "$IV_C2S" | head -c 24)  # First 96 bits
-    local seq_hex=$(printf "%08x" "$SEQ_NUM_C2S")       # 32-bit sequence
-    local current_iv="${iv_prefix}${seq_hex}"
+    # Read initial buffer (2048 bytes should be enough for most packets)
+    dd bs=1 count=2048 of="$WORKDIR/enc_buffer" 2>/dev/null
+    local bytes_read=$(wc -c < "$WORKDIR/enc_buffer")
 
-    openssl enc -d -aes-128-ctr \
-        -K "$ENC_KEY_C2S" \
-        -iv "$current_iv" \
-        -in "$WORKDIR/enc_block1" \
-        -out "$WORKDIR/dec_block1" 2>/dev/null
-
-    # Extract packet length from first 4 bytes
-    local packet_len_hex=$(head -c 4 "$WORKDIR/dec_block1" | bin_to_hex)
-    packet_len=$((0x$packet_len_hex))
-
-    log "DEBUG: Encrypted packet - len_hex=$packet_len_hex len_dec=$packet_len"
-
-    if [ "$packet_len" -eq 0 ] || [ "$packet_len" -gt 35000 ]; then
-        log "ERROR: Invalid encrypted packet length: $packet_len (hex: $packet_len_hex)"
-        log "DEBUG: First 16 bytes encrypted: $(od -An -tx1 < "$WORKDIR/enc_block1" | tr -d ' \n')"
-        log "DEBUG: First 16 bytes decrypted: $(od -An -tx1 < "$WORKDIR/dec_block1" | tr -d ' \n')"
-        log "DEBUG: ENC_KEY_C2S=$ENC_KEY_C2S"
-        log "DEBUG: SEQ_NUM_C2S=$SEQ_NUM_C2S"
+    if [ $bytes_read -lt 36 ]; then  # At least 4 (len) + 1 (pad) + 1 (type) + 30 padding + MAC
+        log "ERROR: Not enough data read ($bytes_read bytes)"
         return 1
     fi
 
-    # Calculate how much more to read (packet_len + 4 bytes we already have in block1 - 16 bytes we read)
-    # Total packet size is 4 (length) + packet_len
-    # We already read 16 bytes, so we need to read: (4 + packet_len - 16) more bytes
-    local remaining=$((packet_len + 4 - 16))
-    if [ $remaining -gt 0 ]; then
-        dd bs=1 count=$remaining of="$WORKDIR/enc_rest" 2>/dev/null
-        cat "$WORKDIR/enc_block1" "$WORKDIR/enc_rest" > "$WORKDIR/enc_packet"
-    else
-        # Entire packet fit in first 16 bytes
-        head -c $((packet_len + 4)) "$WORKDIR/enc_block1" > "$WORKDIR/enc_packet"
-    fi
+    # Use derived IV directly (SSH doesn't modify IV per packet in CTR mode)
+    # The derived IV is used once, OpenSSL handles counter incrementation
+    local current_iv="$IV_C2S"
 
-    # Read MAC (32 bytes for HMAC-SHA256)
-    dd bs=1 count=32 of="$WORKDIR/received_mac" 2>/dev/null
-
-    # Decrypt full packet
+    # Decrypt buffer to get packet length
     openssl enc -d -aes-128-ctr \
         -K "$ENC_KEY_C2S" \
         -iv "$current_iv" \
-        -in "$WORKDIR/enc_packet" \
-        -out "$WORKDIR/packet_decrypted" 2>/dev/null
+        -in "$WORKDIR/enc_buffer" \
+        -out "$WORKDIR/dec_buffer" 2>/dev/null
 
-    # Verify MAC over unencrypted packet
+    # Extract packet length from decrypted first 4 bytes
+    local packet_len_hex=$(head -c 4 "$WORKDIR/dec_buffer" | bin_to_hex)
+    local packet_len=$((0x$packet_len_hex))
+
+    log "DEBUG: Packet len=$packet_len (hex=$packet_len_hex) seq=$SEQ_NUM_C2S"
+
+    if [ "$packet_len" -eq 0 ] || [ "$packet_len" -gt 35000 ]; then
+        log "ERROR: Invalid packet length: $packet_len"
+        log "DEBUG: IV=$current_iv Key=$ENC_KEY_C2S"
+        log "DEBUG: Enc (first 16): $(head -c 16 "$WORKDIR/enc_buffer" | od -An -tx1)"
+        log "DEBUG: Dec (first 16): $(head -c 16 "$WORKDIR/dec_buffer" | od -An -tx1)"
+        return 1
+    fi
+
+    # Total needed: 4 (length field) + packet_len + 32 (MAC)
+    local total_needed=$((4 + packet_len + 32))
+
+    if [ $bytes_read -lt $total_needed ]; then
+        # Need to read more
+        local more_needed=$((total_needed - bytes_read))
+        dd bs=1 count=$more_needed >> "$WORKDIR/enc_buffer" 2>/dev/null
+
+        # Re-decrypt with complete data
+        openssl enc -d -aes-128-ctr \
+            -K "$ENC_KEY_C2S" \
+            -iv "$current_iv" \
+            -in "$WORKDIR/enc_buffer" \
+            -out "$WORKDIR/dec_buffer" 2>/dev/null
+    fi
+
+    # Extract MAC from encrypted stream (after packet)
+    dd bs=1 skip=$((4 + packet_len)) count=32 if="$WORKDIR/enc_buffer" of="$WORKDIR/received_mac" 2>/dev/null
+
+    # Extract unencrypted packet for MAC verification
+    head -c $((4 + packet_len)) "$WORKDIR/dec_buffer" > "$WORKDIR/packet_plain"
+
+    # Verify MAC: HMAC-SHA256(sequence_number || unencrypted_packet)
     {
         write_uint32 "$SEQ_NUM_C2S"
-        cat "$WORKDIR/packet_decrypted"
-    } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_C2S" -binary \
-      > "$WORKDIR/computed_mac"
+        cat "$WORKDIR/packet_plain"
+    } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_C2S" -binary > "$WORKDIR/computed_mac"
 
     if ! cmp -s "$WORKDIR/computed_mac" "$WORKDIR/received_mac"; then
         log "ERROR: MAC verification failed!"
+        log "DEBUG: Seq: $SEQ_NUM_C2S"
+        log "DEBUG: MAC key: $MAC_KEY_C2S"
+        log "DEBUG: Plain packet (first 32): $(head -c 32 "$WORKDIR/packet_plain" | od -An -tx1)"
+        log "DEBUG: Computed MAC: $(od -An -tx1 < "$WORKDIR/computed_mac" | tr -d '\n')"
+        log "DEBUG: Received MAC: $(od -An -tx1 < "$WORKDIR/received_mac" | tr -d '\n')"
+        log "DEBUG: Packet plain size: $(wc -c < "$WORKDIR/packet_plain")"
         return 1
     fi
 
-    # Extract payload (skip 4-byte length + 1-byte padding_length)
-    local padding_len=$(head -c 5 "$WORKDIR/packet_decrypted" | tail -c 1 | bin_to_hex)
+    # Extract payload: skip length(4) + padding_len(1), extract payload, skip padding
+    local padding_len=$(dd bs=1 skip=4 count=1 if="$WORKDIR/packet_plain" 2>/dev/null | bin_to_hex)
     padding_len=$((0x$padding_len))
     local payload_len=$((packet_len - 1 - padding_len))
 
-    tail -c +6 "$WORKDIR/packet_decrypted" | head -c "$payload_len" > "$output_file"
+    dd bs=1 skip=5 count=$payload_len if="$WORKDIR/packet_plain" of="$output_file" 2>/dev/null
 
-    # Increment sequence number - STATE MANAGEMENT IN BASH!
+    # Increment sequence number - STATE MANAGEMENT!
     ((SEQ_NUM_C2S++))
 
-    log "Received encrypted packet #$((SEQ_NUM_C2S-1)) (len=$packet_len)"
+    log "✅ Decrypted packet #$((SEQ_NUM_C2S-1)): len=$packet_len payload=$payload_len"
 
     return 0
 }
