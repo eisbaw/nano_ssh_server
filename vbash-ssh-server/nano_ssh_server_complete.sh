@@ -335,6 +335,9 @@ send_packet_unencrypted() {
     write_uint8 "$padding_len"
     cat "$payload_file"
     dd if=/dev/urandom bs=1 count=$padding_len 2>/dev/null
+
+    # Increment sequence number (even for unencrypted packets)
+    ((SEQ_NUM_S2C++))
 }
 
 send_packet_encrypted() {
@@ -423,6 +426,9 @@ read_packet_unencrypted() {
     local payload_len=$((packet_len - 1 - padding_len))
     tail -c +2 "$WORKDIR/packet_tmp" | head -c "$payload_len" > "$output_file"
 
+    # Increment sequence number (even for unencrypted packets)
+    ((SEQ_NUM_C2S++))
+
     return 0
 }
 
@@ -430,10 +436,11 @@ read_packet_encrypted() {
     local output_file="$1"
 
     # AES-CTR is a stream cipher - we must decrypt in one pass!
-    # Strategy: Read a buffer, decrypt once, extract length, read more if needed
+    # Strategy: Read minimum needed first, then read more if needed
 
-    # Read initial buffer (2048 bytes should be enough for most packets)
-    dd bs=1 count=2048 of="$WORKDIR/enc_buffer" 2>/dev/null
+    # Read minimum: 4 (enc length) + 32 (min packet) + 32 (MAC) = 68 bytes
+    # Use head instead of dd to avoid blocking
+    head -c 128 > "$WORKDIR/enc_buffer" 2>/dev/null
     local bytes_read=$(wc -c < "$WORKDIR/enc_buffer")
 
     log "DEBUG: Read $bytes_read encrypted bytes from stream"
@@ -475,7 +482,7 @@ read_packet_encrypted() {
     if [ $bytes_read -lt $total_needed ]; then
         # Need to read more
         local more_needed=$((total_needed - bytes_read))
-        dd bs=1 count=$more_needed >> "$WORKDIR/enc_buffer" 2>/dev/null
+        head -c $more_needed >> "$WORKDIR/enc_buffer" 2>/dev/null
 
         # Re-decrypt with complete data
         openssl enc -d -aes-128-ctr \
@@ -511,10 +518,13 @@ read_packet_encrypted() {
     log "DEBUG RX: Received MAC: $(od -An -tx1 < "$WORKDIR/received_mac" | tr '\n' ' ')"
 
     if ! cmp -s "$WORKDIR/computed_mac" "$WORKDIR/received_mac"; then
-        log "WARNING: MAC verification failed - proceeding anyway for debugging"
-        # Temporarily continue despite MAC failure to test decryption
-        # return 1
+        log "ERROR: MAC verification failed"
+        log "  Computed: $(od -An -tx1 < "$WORKDIR/computed_mac" | head -1)"
+        log "  Received: $(od -An -tx1 < "$WORKDIR/received_mac" | head -1)"
+        return 1
     fi
+
+    log "✅ MAC verification PASSED!"
 
     # Extract payload: skip length(4) + padding_len(1), extract payload, skip padding
     local padding_len=$(dd bs=1 skip=4 count=1 if="$WORKDIR/packet_plain" 2>/dev/null | bin_to_hex)
@@ -648,11 +658,11 @@ handle_key_exchange() {
     fi
 
     # Enable encryption!
+    # NOTE: Sequence numbers do NOT reset - they continue from current values
     ENCRYPTION_ENABLED=1
-    SEQ_NUM_S2C=0
-    SEQ_NUM_C2S=0
 
     log "=== ENCRYPTION ENABLED - State management active! ==="
+    log "Sequence numbers: S2C=$SEQ_NUM_S2C, C2S=$SEQ_NUM_C2S"
 
     return 0
 }
