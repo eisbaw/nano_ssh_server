@@ -51,6 +51,8 @@ declare -g IV_S2C=""       # IV server to client (hex)
 declare -g IV_C2S=""       # IV client to server (hex)
 declare -g MAC_KEY_S2C=""  # MAC key server to client (hex)
 declare -g MAC_KEY_C2S=""  # MAC key client to server (hex)
+declare -g BYTES_S2C=0     # Cumulative encrypted bytes S2C (for AES-CTR state)
+declare -g BYTES_C2S=0     # Cumulative encrypted bytes C2S (for AES-CTR state)
 
 # Logging
 log() {
@@ -359,8 +361,16 @@ send_packet_encrypted() {
     {
         write_uint32 "$SEQ_NUM_S2C"
         cat "$WORKDIR/packet_plain"
-    } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_S2C" -binary \
+    } > "$WORKDIR/mac_input"
+
+    log "DEBUG TX: MAC input size=$(wc -c < "$WORKDIR/mac_input") seq=$SEQ_NUM_S2C"
+    log "DEBUG TX: MAC input (first 48): $(head -c 48 "$WORKDIR/mac_input" | od -An -tx1 | tr '\n' ' ')"
+    log "DEBUG TX: MAC key: $MAC_KEY_S2C"
+
+    cat "$WORKDIR/mac_input" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_S2C" -binary \
       > "$WORKDIR/packet_mac"
+
+    log "DEBUG TX: Computed MAC: $(od -An -tx1 < "$WORKDIR/packet_mac" | tr '\n' ' ')"
 
     # Use derived IV directly
     # In SSH AES-CTR, the IV is used as-is for the first packet
@@ -489,13 +499,19 @@ read_packet_encrypted() {
     {
         write_uint32 "$SEQ_NUM_C2S"
         cat "$WORKDIR/packet_plain"
-    } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_C2S" -binary > "$WORKDIR/computed_mac"
+    } > "$WORKDIR/mac_input_rx"
+
+    log "DEBUG RX: MAC input size=$(wc -c < "$WORKDIR/mac_input_rx") seq=$SEQ_NUM_C2S"
+    log "DEBUG RX: MAC input (first 48): $(head -c 48 "$WORKDIR/mac_input_rx" | od -An -tx1 | tr '\n' ' ')"
+    log "DEBUG RX: MAC key: $MAC_KEY_C2S"
+
+    cat "$WORKDIR/mac_input_rx" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_C2S" -binary > "$WORKDIR/computed_mac"
+
+    log "DEBUG RX: Computed MAC: $(od -An -tx1 < "$WORKDIR/computed_mac" | tr '\n' ' ')"
+    log "DEBUG RX: Received MAC: $(od -An -tx1 < "$WORKDIR/received_mac" | tr '\n' ' ')"
 
     if ! cmp -s "$WORKDIR/computed_mac" "$WORKDIR/received_mac"; then
         log "WARNING: MAC verification failed - proceeding anyway for debugging"
-        log "DEBUG: Seq: $SEQ_NUM_C2S"
-        log "DEBUG: Computed MAC: $(od -An -tx1 < "$WORKDIR/computed_mac" | tr -d '\n')"
-        log "DEBUG: Received MAC: $(od -An -tx1 < "$WORKDIR/received_mac" | tr -d '\n')"
         # Temporarily continue despite MAC failure to test decryption
         # return 1
     fi
