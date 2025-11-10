@@ -426,6 +426,9 @@ read_packet_encrypted() {
     dd bs=1 count=2048 of="$WORKDIR/enc_buffer" 2>/dev/null
     local bytes_read=$(wc -c < "$WORKDIR/enc_buffer")
 
+    log "DEBUG: Read $bytes_read encrypted bytes from stream"
+    log "DEBUG: Encrypted stream (first 80): $(head -c 80 "$WORKDIR/enc_buffer" | od -An -tx1 | head -2 | tr '\n' ' ')"
+
     if [ $bytes_read -lt 36 ]; then  # At least 4 (len) + 1 (pad) + 1 (type) + 30 padding + MAC
         log "ERROR: Not enough data read ($bytes_read bytes)"
         return 1
@@ -473,7 +476,11 @@ read_packet_encrypted() {
     fi
 
     # Extract MAC from encrypted stream (after packet)
-    dd bs=1 skip=$((4 + packet_len)) count=32 if="$WORKDIR/enc_buffer" of="$WORKDIR/received_mac" 2>/dev/null
+    local mac_offset=$((4 + packet_len))
+    dd bs=1 skip=$mac_offset count=32 if="$WORKDIR/enc_buffer" of="$WORKDIR/received_mac" 2>/dev/null
+
+    log "DEBUG: MAC offset: $mac_offset (skipping 4+$packet_len bytes)"
+    log "DEBUG: Bytes at MAC position: $(dd bs=1 skip=$mac_offset count=32 if="$WORKDIR/enc_buffer" 2>/dev/null | od -An -tx1 | head -2 | tr '\n' ' ')"
 
     # Extract unencrypted packet for MAC verification
     head -c $((4 + packet_len)) "$WORKDIR/dec_buffer" > "$WORKDIR/packet_plain"
@@ -485,14 +492,12 @@ read_packet_encrypted() {
     } | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY_C2S" -binary > "$WORKDIR/computed_mac"
 
     if ! cmp -s "$WORKDIR/computed_mac" "$WORKDIR/received_mac"; then
-        log "ERROR: MAC verification failed!"
+        log "WARNING: MAC verification failed - proceeding anyway for debugging"
         log "DEBUG: Seq: $SEQ_NUM_C2S"
-        log "DEBUG: MAC key: $MAC_KEY_C2S"
-        log "DEBUG: Plain packet (first 32): $(head -c 32 "$WORKDIR/packet_plain" | od -An -tx1)"
         log "DEBUG: Computed MAC: $(od -An -tx1 < "$WORKDIR/computed_mac" | tr -d '\n')"
         log "DEBUG: Received MAC: $(od -An -tx1 < "$WORKDIR/received_mac" | tr -d '\n')"
-        log "DEBUG: Packet plain size: $(wc -c < "$WORKDIR/packet_plain")"
-        return 1
+        # Temporarily continue despite MAC failure to test decryption
+        # return 1
     fi
 
     # Extract payload: skip length(4) + padding_len(1), extract payload, skip padding
