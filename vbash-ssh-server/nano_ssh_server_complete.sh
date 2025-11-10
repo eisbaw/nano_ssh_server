@@ -73,6 +73,23 @@ bin_to_hex() {
     od -An -tx1 -v | tr -d ' \n'
 }
 
+# Increment IV by N blocks (for AES-CTR)
+# AES-CTR treats IV as a 128-bit big-endian counter
+increment_iv() {
+    local iv_hex="$1"
+    local num_blocks="$2"
+
+    # Convert hex IV to bytes, add num_blocks, convert back
+    # Treat as 128-bit big-endian integer
+    python3 -c "
+iv_bytes = bytes.fromhex('$iv_hex')
+iv_int = int.from_bytes(iv_bytes, 'big')
+iv_int = (iv_int + $num_blocks) % (2**128)
+new_iv = iv_int.to_bytes(16, 'big')
+print(new_iv.hex())
+"
+}
+
 read_bytes() {
     dd bs=1 count="$1" 2>/dev/null
 }
@@ -395,7 +412,12 @@ send_packet_encrypted() {
     # Increment sequence number - STATE MANAGEMENT IN BASH!
     ((SEQ_NUM_S2C++))
 
-    log "Sent encrypted packet #$((SEQ_NUM_S2C-1)) (len=$packet_len)"
+    # Advance IV for AES-CTR (counter increments per 16-byte block)
+    local encrypted_size=$((4 + packet_len))  # length field + packet
+    local num_blocks=$(( (encrypted_size + 15) / 16 ))  # Round up to blocks
+    IV_S2C=$(increment_iv "$IV_S2C" "$num_blocks")
+
+    log "Sent encrypted packet #$((SEQ_NUM_S2C-1)) (len=$packet_len, advanced IV by $num_blocks blocks)"
 }
 
 send_packet() {
@@ -538,7 +560,12 @@ read_packet_encrypted() {
     # Increment sequence number - STATE MANAGEMENT!
     ((SEQ_NUM_C2S++))
 
-    log "✅ Decrypted packet #$((SEQ_NUM_C2S-1)): len=$packet_len payload=$payload_len"
+    # Advance IV for AES-CTR (counter increments per 16-byte block)
+    local encrypted_size=$((4 + packet_len))  # length field + packet
+    local num_blocks=$(( (encrypted_size + 15) / 16 ))  # Round up to blocks
+    IV_C2S=$(increment_iv "$IV_C2S" "$num_blocks")
+
+    log "✅ Decrypted packet #$((SEQ_NUM_C2S-1)): len=$packet_len payload=$payload_len (advanced IV by $num_blocks blocks)"
 
     return 0
 }
