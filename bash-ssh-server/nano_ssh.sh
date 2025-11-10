@@ -613,10 +613,6 @@ handle_ecdh_init() {
 
     write_ssh_packet $SSH_MSG_KEX_ECDH_REPLY "$reply"
 
-    # CRITICAL: Flush stdout to ensure KEX_ECDH_REPLY reaches client before NEWKEYS
-    # Using dd to force a flush without closing the file descriptor
-    dd of=/dev/stdout count=0 2>/dev/null
-
     log "DEBUG: About to send NEWKEYS"
 
     # Send NEWKEYS (still plaintext)
