@@ -454,8 +454,8 @@ build_kexinit() {
     payload="${payload}${cookie}"
 
     # Algorithm name-lists (all as SSH strings)
-    # Add kex-strict-s-v00@openssh.com for OpenSSH 9.5+ (Terrapin mitigation)
-    local kex_alg="curve25519-sha256,kex-strict-s-v00@openssh.com"
+    # DISABLED: kex-strict-s-v00@openssh.com - causes OpenSSH 9.6p1 to reject connection
+    local kex_alg="curve25519-sha256"
     local host_key_alg="ssh-ed25519"
     local cipher="aes128-ctr"
     local mac="hmac-sha2-256"
@@ -520,12 +520,9 @@ handle_kexinit() {
         client_has_strict=1
     fi
 
-    # Check if we're advertising strict KEX (will be in SERVER_KEXINIT we're about to send)
-    # For now, hardcode the check - we advertise it if OpenSSH 9.5+ is detected
-    if [[ "$kex_algos" =~ kex-strict-c-v00@openssh.com ]]; then
-        # Client supports it, and we advertise it in build_kexinit()
-        server_has_strict=1
-    fi
+    # Check if we're advertising strict KEX
+    # Since we removed kex-strict-s-v00@openssh.com from build_kexinit(), we never advertise it
+    server_has_strict=0  # DISABLED: We don't advertise kex-strict-s-v00@openssh.com
 
     if [ $client_has_strict -eq 1 ] && [ $server_has_strict -eq 1 ]; then
         STRICT_KEX_MODE=1
