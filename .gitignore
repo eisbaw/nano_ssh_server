@@ -30,3 +30,4 @@ host_key.pub
 *.log
 test_output/
 build-musl/
+bash-ssh-server/*.backup
