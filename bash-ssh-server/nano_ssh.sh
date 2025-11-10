@@ -41,6 +41,7 @@ SERVER_KEXINIT=""
 SHARED_SECRET=""
 EXCHANGE_HASH=""
 SESSION_ID=""
+STRICT_KEX_MODE=0  # Set to 1 if both client and server support strict KEX
 
 # Encryption state (set after NEWKEYS)
 # RFC 4253: Encryption is asymmetric - each direction activates independently
@@ -498,6 +499,26 @@ handle_kexinit() {
     # Save client's KEXINIT payload for exchange hash
     CLIENT_KEXINIT="$client_packet"
 
+    # Parse client's KEX algorithms to check for strict KEX support
+    # Skip cookie (32 hex chars = 16 bytes)
+    local pos=32
+    # Read KEX algorithms name-list length
+    local kex_len=$((16#${client_packet:$pos:8}))
+    pos=$((pos + 8))
+    # Read KEX algorithms string
+    local kex_algos=$(hex2bin "${client_packet:$pos:$((kex_len * 2))}")
+
+    log "Client KEX algorithms: $kex_algos"
+
+    # Check if client supports strict KEX
+    if [[ "$kex_algos" =~ kex-strict-c-v00@openssh.com ]]; then
+        STRICT_KEX_MODE=1
+        log "STRICT KEX MODE ENABLED (both sides support it)"
+    else
+        STRICT_KEX_MODE=0
+        log "Strict KEX not enabled (client doesn't support it)"
+    fi
+
     # Build and send server's KEXINIT
     SERVER_KEXINIT=$(build_kexinit)
     write_ssh_packet $SSH_MSG_KEXINIT "$SERVER_KEXINIT"
@@ -585,10 +606,18 @@ handle_ecdh_init() {
 
     # RFC 4253 Section 7.3: "All messages sent after this message MUST use the new keys"
     # Enable S2C encryption immediately after sending NEWKEYS
-    # Set sequence number to the count of packets we've already sent (KEXINIT, KEX_ECDH_REPLY, NEWKEYS)
-    SEQUENCE_NUM_S2C=$PACKETS_SENT
+    #
+    # Sequence number initialization:
+    # - Strict KEX mode: MUST reset to 0 after NEWKEYS (draft-miller-sshm-strict-kex)
+    # - Normal mode: Continue from packet count (RFC 4253)
+    if [ $STRICT_KEX_MODE -eq 1 ]; then
+        SEQUENCE_NUM_S2C=0
+        log "NEWKEYS sent - S2C encryption ENABLED (STRICT KEX: seq RESET to 0)"
+    else
+        SEQUENCE_NUM_S2C=$PACKETS_SENT
+        log "NEWKEYS sent - S2C encryption ENABLED (seq starts at $SEQUENCE_NUM_S2C)"
+    fi
     ENCRYPTION_S2C_ENABLED=1
-    log "NEWKEYS sent - S2C encryption ENABLED for all outgoing packets (seq starts at $SEQUENCE_NUM_S2C)"
     log "Waiting for client NEWKEYS in main loop..."
     # Note: We DON'T read client's NEWKEYS here - let the main loop handle it
     # This avoids buffering issues with BASH I/O
@@ -779,10 +808,18 @@ handle_connection() {
                 ;;
             $SSH_MSG_NEWKEYS)
                 # Enable C2S encryption after receiving client's NEWKEYS
-                # Set sequence number to the count of packets we've received so far
-                SEQUENCE_NUM_C2S=$PACKETS_RECEIVED
+                #
+                # Sequence number initialization:
+                # - Strict KEX mode: MUST reset to 0 after NEWKEYS (draft-miller-sshm-strict-kex)
+                # - Normal mode: Continue from packet count (RFC 4253)
+                if [ $STRICT_KEX_MODE -eq 1 ]; then
+                    SEQUENCE_NUM_C2S=0
+                    log "Client NEWKEYS received - C2S encryption ENABLED (STRICT KEX: seq RESET to 0)"
+                else
+                    SEQUENCE_NUM_C2S=$PACKETS_RECEIVED
+                    log "Client NEWKEYS received - C2S encryption ENABLED (seq starts at $SEQUENCE_NUM_C2S)"
+                fi
                 ENCRYPTION_C2S_ENABLED=1
-                log "Client NEWKEYS received - C2S encryption ENABLED (seq starts at $SEQUENCE_NUM_C2S)"
                 log "Full duplex encryption active (S2C seq=$SEQUENCE_NUM_S2C, C2S seq=$SEQUENCE_NUM_C2S)"
                 ;;
             $SSH_MSG_SERVICE_REQUEST)
