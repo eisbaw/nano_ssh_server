@@ -125,9 +125,12 @@ write_ssh_string() {
 # Read an SSH packet (RFC 4253 section 6)
 # Returns: message type and payload as hex
 read_ssh_packet() {
+    log "DEBUG: Attempting to read packet (encryption C2S=$ENCRYPTION_C2S_ENABLED)..."
     local packet_len=$(read_uint32)
+    log "DEBUG: Read packet_len=$packet_len"
     if [ $packet_len -eq 0 ]; then
         log "Connection closed (packet_len=0)"
+        log "DEBUG: stdin appears closed or no data available"
         return 1
     fi
 
