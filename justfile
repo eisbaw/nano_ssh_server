@@ -136,6 +136,17 @@ test-all:
     echo "Failed: ${FAILED}"
     echo "========================================"
 
+    # Exit with error if any tests failed
+    if [ ${FAILED} -gt 0 ]; then
+        echo ""
+        echo "✗ TESTS FAILED"
+        exit 1
+    else
+        echo ""
+        echo "✓ ALL TESTS PASSED"
+        exit 0
+    fi
+
 # Connect to running server with SSH client (run in separate terminal)
 connect:
     @echo "Connecting to SSH server on port 2222..."
