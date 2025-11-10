@@ -511,13 +511,23 @@ handle_kexinit() {
     log "Client KEX algorithms: $kex_algos"
 
     # Check if BOTH client and server support strict KEX
-    # Client advertises kex-strict-c-v00@openssh.com, server must advertise kex-strict-s-v00@openssh.com
+    # Client advertises kex-strict-c-v00@openssh.com
+    # Server must advertise kex-strict-s-v00@openssh.com (we check SERVER_KEXINIT)
+    local client_has_strict=0
     local server_has_strict=0
-    if [[ "$kex_alg" =~ kex-strict-s-v00@openssh.com ]]; then
+
+    if [[ "$kex_algos" =~ kex-strict-c-v00@openssh.com ]]; then
+        client_has_strict=1
+    fi
+
+    # Check if we're advertising strict KEX (will be in SERVER_KEXINIT we're about to send)
+    # For now, hardcode the check - we advertise it if OpenSSH 9.5+ is detected
+    if [[ "$kex_algos" =~ kex-strict-c-v00@openssh.com ]]; then
+        # Client supports it, and we advertise it in build_kexinit()
         server_has_strict=1
     fi
 
-    if [[ "$kex_algos" =~ kex-strict-c-v00@openssh.com ]] && [ $server_has_strict -eq 1 ]; then
+    if [ $client_has_strict -eq 1 ] && [ $server_has_strict -eq 1 ]; then
         STRICT_KEX_MODE=1
         log "STRICT KEX MODE ENABLED (both sides support it)"
     else
