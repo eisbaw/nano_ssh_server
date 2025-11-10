@@ -453,7 +453,8 @@ build_kexinit() {
     payload="${payload}${cookie}"
 
     # Algorithm name-lists (all as SSH strings)
-    local kex_alg="curve25519-sha256"
+    # Add kex-strict-s-v00@openssh.com for OpenSSH 9.5+ (Terrapin mitigation)
+    local kex_alg="curve25519-sha256,kex-strict-s-v00@openssh.com"
     local host_key_alg="ssh-ed25519"
     local cipher="aes128-ctr"
     local mac="hmac-sha2-256"
