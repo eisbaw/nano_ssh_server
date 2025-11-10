@@ -287,6 +287,7 @@ write_ssh_packet() {
 
         log "  Complete packet hex (first 60 chars): ${complete_packet:0:60}..."
         log "  Packet structure: len=$packet_len, padding=$padding_len, total_hex_len=${#complete_packet}"
+        log "  FULL_HEX: $complete_packet"
 
         # Write entire packet as single atomic operation to avoid buffering issues
         log "DEBUG: About to write ${#complete_packet} hex chars ($((${#complete_packet}/2)) bytes) to stdout"
@@ -353,7 +354,13 @@ compute_shared_secret() {
 # Sign data with Ed25519 host key
 sign_data() {
     local data_hex="$1"
-    hex2bin "$data_hex" | openssl pkeyutl -sign -inkey "$TMPDIR/host_key.pem" 2>/dev/null | bin2hex
+
+    # For Ed25519, OpenSSL pkeyutl with -rawin requires a file (can't determine size from pipe)
+    # Write data to temp file, sign it, then clean up
+    local tmp_data="$TMPDIR/sign_data.bin"
+    hex2bin "$data_hex" > "$tmp_data"
+    openssl pkeyutl -sign -rawin -inkey "$TMPDIR/host_key.pem" -in "$tmp_data" 2>/dev/null | bin2hex
+    rm -f "$tmp_data"
 }
 
 # Compute SHA256 hash
@@ -608,7 +615,17 @@ handle_ecdh_init() {
     reply="${reply}$(printf "%08x" 32)${Q_S}"
 
     # Signature of H
-    local sig_blob=$(printf "%08x" 11; echo -n "ssh-ed25519" | bin2hex; printf "%08x" 64; echo "$signature")
+    # Build signature blob: string("ssh-ed25519") + string(signature)
+    log "DEBUG: signature var length: ${#signature} chars"
+    log "DEBUG: signature first 40 chars: ${signature:0:40}"
+    local sig_blob=""
+    sig_blob="${sig_blob}$(printf "%08x" 11)"
+    sig_blob="${sig_blob}$(echo -n "ssh-ed25519" | bin2hex)"
+    sig_blob="${sig_blob}$(printf "%08x" 64)"
+    log "DEBUG: sig_blob before adding signature: ${#sig_blob} chars (should be 38)"
+    sig_blob="${sig_blob}${signature}"
+    log "DEBUG: sig_blob after adding signature: ${#sig_blob} chars (should be 166)"
+    log "DEBUG: sig_blob calculated length: $((${#sig_blob} / 2)) bytes (should be 83)"
     reply="${reply}$(printf "%08x" $((${#sig_blob} / 2)))${sig_blob}"
 
     write_ssh_packet $SSH_MSG_KEX_ECDH_REPLY "$reply"
