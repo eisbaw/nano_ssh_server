@@ -11,15 +11,17 @@
 # FROM v20-opt: -fwhole-program -fipa-pta -fno-common, removed -lsodium, added curve25519-donna-c64.c
 # FROM v21-src-opt: Removed error messages, unused constants, simplified source (102 lines removed)
 # FROM v21-static: musl-gcc, -static linking
-# ADDITIONAL: More aggressive inlining, jump table opts, linker relaxation
+# ADDITIONAL: -Oz (size-first), alignment opts, selective inlining, loop opts
 
 CC = musl-gcc
-CFLAGS = -Wall -Wextra -std=c11 -Os -flto -ffunction-sections -fdata-sections \
+CFLAGS = -Wall -Wextra -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector \
-         -fmerge-all-constants -fno-ident -fno-inline-functions \
+         -fmerge-all-constants -fno-ident -finline-functions-called-once \
          -fshort-enums -fomit-frame-pointer -ffast-math -fno-math-errno \
          -fvisibility=hidden -Wno-unused-result -fno-builtin -fno-plt \
          -fwhole-program -fipa-pta -fno-common -fno-jump-tables \
+         -fno-align-functions -fno-align-jumps -fno-align-loops -fno-align-labels \
+         -fno-tree-loop-optimize \
          -D_POSIX_C_SOURCE=200809L
 LDFLAGS = -static -s -Wl,--gc-sections -Wl,--strip-all -Wl,--as-needed \
           -Wl,--hash-style=gnu -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr \
@@ -61,7 +63,7 @@ verify: $(TARGET)
 	@ls -lh $(TARGET)
 	@stat -c "Size: %s bytes" $(TARGET) 2>/dev/null || stat -f "Size: %z bytes" $(TARGET)
 	@echo ""
-	@echo "✅ v22-backport: Further optimized (v21-src-opt + aggressive flags)!"
+	@echo "✅ v22-backport: Legitimately optimized (-Oz + alignment + loop opts)!"
 	@echo ""
 
 clean:
