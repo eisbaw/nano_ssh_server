@@ -89,7 +89,14 @@ bin2hex() {
 # Read N bytes from stdin and output as hex
 read_bytes() {
     local count=$1
-    dd bs=1 count=$count 2>/dev/null | bin2hex
+    log "DEBUG read_bytes: Attempting to read $count bytes from stdin"
+    local result=$(dd bs=1 count=$count 2>/dev/null | bin2hex)
+    local bytes_read=$((${#result} / 2))
+    log "DEBUG read_bytes: Read $bytes_read bytes (expected $count), hex length=${#result}"
+    if [ $bytes_read -lt $count ]; then
+        log "DEBUG read_bytes: WARNING - Read fewer bytes than expected!"
+    fi
+    echo "$result"
 }
 
 # Read uint32 (4 bytes, big-endian)
@@ -281,9 +288,19 @@ write_ssh_packet() {
         log "  Packet structure: len=$packet_len, padding=$padding_len, total_hex_len=${#complete_packet}"
 
         # Write entire packet as single atomic operation to avoid buffering issues
-        hex2bin "$complete_packet"
+        log "DEBUG: About to write ${#complete_packet} hex chars ($((${#complete_packet}/2)) bytes) to stdout"
+        if hex2bin "$complete_packet"; then
+            log "  Packet sent successfully (hex2bin returned 0)"
+        else
+            log "  ERROR: hex2bin returned $?"
+        fi
 
-        log "  Packet sent successfully"
+        # Try to detect if stdout is still open
+        if [ -t 1 ]; then
+            log "DEBUG: stdout is a terminal"
+        else
+            log "DEBUG: stdout is NOT a terminal (expected for socat)"
+        fi
 
         # Increment packet counter
         PACKETS_SENT=$((PACKETS_SENT + 1))
