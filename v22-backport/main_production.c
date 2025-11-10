@@ -1,13 +1,4 @@
-/*
- * Nano SSH Server - v17-final (Production)
- * Hybrid crypto configuration - optimized for compatibility
- * - Custom AES-128-CTR implementation (no OpenSSL)
- * - Custom SHA-256 implementation
- * - Custom HMAC-SHA256 implementation
- * - c25519 Ed25519 (100% independent from libsodium!)
- * - Custom random number generation (/dev/urandom)
- * - libsodium Curve25519 (proven compatible)
- */
+/* v21: Source-level optimized SSH server */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,80 +12,43 @@
 #include "aes128_minimal.h"
 #include "sha256_minimal.h"
 
-/* Forward declarations */
 ssize_t send_data(int fd, const void *buf, size_t len);
 ssize_t recv_data(int fd, void *buf, size_t len);
 
-/* Configuration */
 #define SERVER_PORT 2222
 #define SERVER_VERSION "SSH-2.0-NanoSSH_0.1"
 #define BACKLOG 5
-
-/* Hardcoded credentials (for minimal implementation) */
 #define VALID_USERNAME "user"
 #define VALID_PASSWORD "password123"
+#define MAX_PACKET_SIZE 35000
+#define MIN_PADDING 4
+#define BLOCK_SIZE_UNENCRYPTED 8
+#define BLOCK_SIZE_AES_CTR 16
 
-/* SSH protocol constants */
-#define MAX_PACKET_SIZE 35000  /* RFC 4253: maximum packet size */
-#define MIN_PADDING 4          /* Minimum padding bytes */
-#define BLOCK_SIZE_UNENCRYPTED 8   /* Block size before encryption */
-#define BLOCK_SIZE_AES_CTR 16      /* Block size for AES-CTR (cipher block size) */
-
-/* SSH message type constants (RFC 4253) */
-#define SSH_MSG_DISCONNECT                1
-#define SSH_MSG_IGNORE                    2
-#define SSH_MSG_UNIMPLEMENTED             3
-#define SSH_MSG_DEBUG                     4
-#define SSH_MSG_SERVICE_REQUEST           5
-#define SSH_MSG_SERVICE_ACCEPT            6
-#define SSH_MSG_KEXINIT                   20
-#define SSH_MSG_NEWKEYS                   21
-#define SSH_MSG_KEX_ECDH_INIT             30
-#define SSH_MSG_KEX_ECDH_REPLY            31
-#define SSH_MSG_USERAUTH_REQUEST          50
-#define SSH_MSG_USERAUTH_FAILURE          51
-#define SSH_MSG_USERAUTH_SUCCESS          52
-#define SSH_MSG_USERAUTH_BANNER           53
-#define SSH_MSG_CHANNEL_OPEN              90
+#define SSH_MSG_SERVICE_REQUEST 5
+#define SSH_MSG_SERVICE_ACCEPT 6
+#define SSH_MSG_KEXINIT 20
+#define SSH_MSG_NEWKEYS 21
+#define SSH_MSG_KEX_ECDH_INIT 30
+#define SSH_MSG_KEX_ECDH_REPLY 31
+#define SSH_MSG_USERAUTH_REQUEST 50
+#define SSH_MSG_USERAUTH_FAILURE 51
+#define SSH_MSG_USERAUTH_SUCCESS 52
+#define SSH_MSG_CHANNEL_OPEN 90
 #define SSH_MSG_CHANNEL_OPEN_CONFIRMATION 91
-#define SSH_MSG_CHANNEL_OPEN_FAILURE      92
-#define SSH_MSG_CHANNEL_WINDOW_ADJUST     93
-#define SSH_MSG_CHANNEL_DATA              94
-#define SSH_MSG_CHANNEL_EXTENDED_DATA     95
-#define SSH_MSG_CHANNEL_EOF               96
-#define SSH_MSG_CHANNEL_CLOSE             97
-#define SSH_MSG_CHANNEL_REQUEST           98
-#define SSH_MSG_CHANNEL_SUCCESS           99
-#define SSH_MSG_CHANNEL_FAILURE           100
-
-/* SSH disconnect reason codes (RFC 4253 Section 11.1) */
-#define SSH_DISCONNECT_HOST_NOT_ALLOWED_TO_CONNECT    1
-#define SSH_DISCONNECT_PROTOCOL_ERROR                 2
-#define SSH_DISCONNECT_KEY_EXCHANGE_FAILED            3
-#define SSH_DISCONNECT_RESERVED                       4
-#define SSH_DISCONNECT_MAC_ERROR                      5
-#define SSH_DISCONNECT_COMPRESSION_ERROR              6
-#define SSH_DISCONNECT_SERVICE_NOT_AVAILABLE          7
-#define SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED 8
-#define SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE        9
-#define SSH_DISCONNECT_CONNECTION_LOST                10
-#define SSH_DISCONNECT_BY_APPLICATION                 11
-#define SSH_DISCONNECT_TOO_MANY_CONNECTIONS           12
-#define SSH_DISCONNECT_AUTH_CANCELLED_BY_USER         13
-#define SSH_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE 14
-#define SSH_DISCONNECT_ILLEGAL_USER_NAME              15
-
-/* Algorithm names for KEXINIT */
-#define KEX_ALGORITHM           "curve25519-sha256"
-#define HOST_KEY_ALGORITHM      "ssh-ed25519"
-#define ENCRYPTION_ALGORITHM    "aes128-ctr"      /* AES-128 in CTR mode */
-#define MAC_ALGORITHM           "hmac-sha2-256"   /* HMAC-SHA256 for packet authentication */
-#define COMPRESSION_ALGORITHM   "none"
-#define LANGUAGE                ""
-
-/* NOTE: Using AES-128-CTR + HMAC-SHA256 instead of ChaCha20-Poly1305@openssh.com
- * because the OpenSSH Poly1305 variant proved too complex to debug. AES-128-CTR is
- * a standard, widely-supported SSH cipher with simpler implementation. */
+#define SSH_MSG_CHANNEL_OPEN_FAILURE 92
+#define SSH_MSG_CHANNEL_DATA 94
+#define SSH_MSG_CHANNEL_EOF 96
+#define SSH_MSG_CHANNEL_CLOSE 97
+#define SSH_MSG_CHANNEL_REQUEST 98
+#define SSH_MSG_CHANNEL_SUCCESS 99
+#define SSH_MSG_CHANNEL_FAILURE 100
+#define KEX_ALGORITHM "curve25519-sha256"
+#define HOST_KEY_ALGORITHM "ssh-ed25519"
+#define ENCRYPTION_ALGORITHM "aes128-ctr"
+#define MAC_ALGORITHM "hmac-sha2-256"
+#define COMPRESSION_ALGORITHM "none"
+#define LANGUAGE ""
 
 /* ======================
  * Cryptography Helper Functions
@@ -344,38 +298,6 @@ int send_packet(int fd, const uint8_t *payload, size_t payload_len) {
     return 0;
 }
 
-/*
- * Send SSH_MSG_DISCONNECT message
- *
- * Format (RFC 4253 Section 11.1):
- *   byte      SSH_MSG_DISCONNECT (1)
- *   uint32    reason_code
- *   string    description (ISO-10646 UTF-8)
- *   string    language_tag (empty for minimal implementation)
- *
- * This should be sent before closing the connection when an error occurs.
- */
-void send_disconnect(int fd, uint32_t reason_code, const char *description) {
-    uint8_t disconnect_msg[512];
-    size_t msg_len = 0;
-
-    /* Message type */
-    disconnect_msg[msg_len++] = SSH_MSG_DISCONNECT;
-
-    /* Reason code */
-    write_uint32_be(disconnect_msg + msg_len, reason_code);
-    msg_len += 4;
-
-    /* Description string */
-    size_t desc_len = strlen(description);
-    msg_len += write_string(disconnect_msg + msg_len, description, desc_len);
-
-    /* Language tag (empty) */
-    msg_len += write_string(disconnect_msg + msg_len, "", 0);
-
-    /* Try to send, but don't fail if it doesn't work (connection may already be broken) */
-    send_packet(fd, disconnect_msg, msg_len);
-}
 
 /*
  * Receive SSH packet (supports both encrypted and unencrypted)
@@ -944,10 +866,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         }
     }
 
-    /* Check if we hit the buffer limit without finding newline */
     if (i == (int)sizeof(client_version) - 1 && client_version[i] != '\n') {
-        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
-                       "Version string exceeds maximum length");
         close(client_fd);
         return;
     }
@@ -965,10 +884,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         version_len--;
     }
 
-    /* Validate client version starts with "SSH-2.0-" */
     if (strncmp(client_version, "SSH-2.0-", 8) != 0) {
-        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED,
-                       "Only SSH-2.0 is supported");
         close(client_fd);
         return;
     }
@@ -999,10 +915,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         return;
     }
     
-    /* Validate it's a KEXINIT message */
     if (client_kexinit[0] != SSH_MSG_KEXINIT) {
-        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
-                       "Expected KEXINIT message");
         close(client_fd);
         return;
     }
@@ -1045,8 +958,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     if (kex_init_msg[0] != SSH_MSG_KEX_ECDH_INIT) {
-        send_disconnect(client_fd, SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
-                       "Expected KEX_ECDH_INIT message");
         close(client_fd);
         return;
     }
@@ -1215,8 +1126,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     }
 
     if (service_request[0] != SSH_MSG_SERVICE_REQUEST) {
-        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
-                       "Expected SERVICE_REQUEST message");
         close(client_fd);
         return;
     }
@@ -1230,10 +1139,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     service_name[service_name_len] = '\0';
     
-    /* Verify service name is "ssh-userauth" */
     if (strcmp(service_name, "ssh-userauth") != 0) {
-        send_disconnect(client_fd, SSH_DISCONNECT_SERVICE_NOT_AVAILABLE,
-                       "Only ssh-userauth service is supported");
         close(client_fd);
         return;
     }
@@ -1262,7 +1168,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     char service[256];
     char method[256];
     char password[256];
-    uint8_t change_password;
     int authenticated = 0;
 
     /* Authentication loop - allow multiple attempts */
@@ -1331,8 +1236,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
 
     /* Handle password authentication */
     if (strcmp(method, "password") == 0) {
-        /* Parse change password flag */
-        change_password = *ptr;
         ptr += 1;
 
         /* Parse password */
@@ -1416,7 +1319,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     char channel_type[64];
     uint32_t client_channel_id;
     uint32_t client_window_size;
-    uint32_t client_max_packet;
     uint32_t server_channel_id = 0;  /* We assign channel ID 0 */
     uint32_t server_window_size = 32768;
     uint32_t server_max_packet = 16384;
@@ -1461,8 +1363,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
     client_window_size = read_uint32_be(ch_ptr);
     ch_ptr += 4;
 
-    /* Parse maximum_packet_size */
-    client_max_packet = read_uint32_be(ch_ptr);
     ch_ptr += 4;
 
                     
@@ -1481,8 +1381,6 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr,
         failure_len += write_string(open_failure + failure_len, "", 0);  /* language tag */
 
         send_packet(client_fd, open_failure, failure_len);
-        send_disconnect(client_fd, SSH_DISCONNECT_PROTOCOL_ERROR,
-                       "Only session channel type is supported");
         close(client_fd);
         return;
     }
