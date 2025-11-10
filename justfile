@@ -352,14 +352,14 @@ run-bash-simple:
     fi
     @cd vbash-ssh-server && ./nano_ssh_server_simple.sh 2222
 
-# Run BASH SSH server (full version - experimental)
+# Run BASH SSH server (full version - working with real SSH clients)
 run-bash:
     @echo "Starting BASH SSH Server (full) on port 2222..."
-    @if [ ! -f "vbash-ssh-server/nano_ssh_server.sh" ]; then \
-        echo "Error: vbash-ssh-server/nano_ssh_server.sh not found"; \
+    @if [ ! -f "vbash-ssh-server/nano_ssh_server_complete.sh" ]; then \
+        echo "Error: vbash-ssh-server/nano_ssh_server_complete.sh not found"; \
         exit 1; \
     fi
-    @cd vbash-ssh-server && ./nano_ssh_server.sh
+    @cd vbash-ssh-server && ./nano_ssh_server_complete.sh
 
 # Test BASH SSH server
 test-bash:

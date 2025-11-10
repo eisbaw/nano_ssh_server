@@ -8,6 +8,23 @@
 # User: user
 # Password: password123
 #
+# ⚠️  WARNING: THIS VERSION HAS A CRITICAL BUG ⚠️
+#
+# This implementation stores binary SSH packets in BASH variables, which
+# cannot contain null bytes (0x00). This causes packet truncation and
+# malformed packets, preventing proper SSH handshake.
+#
+# ISSUE: In send_packet(), the payload is passed as a string parameter:
+#   send_packet "$payload"
+# Any null bytes in $payload are truncated, and ${#payload} gives wrong length.
+#
+# SOLUTION: Use nano_ssh_server_complete.sh instead, which uses file-based
+# binary processing to avoid this issue. All binary data is stored in files
+# and processed with tools like openssl, dd, and cat.
+#
+# See: vbash-ssh-server/nano_ssh_server_complete.sh (working version)
+# See: vbash-ssh-server/FINAL_ACHIEVEMENT.md (proof it works end-to-end)
+#
 
 set -euo pipefail
 
