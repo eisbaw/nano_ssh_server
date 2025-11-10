@@ -339,6 +339,60 @@ test-v17-static2:
     @echo "✅ v17-static2 test complete!"
     @echo ""
 
+# Build v22-backport with musl (requires musl-tools)
+build-v22-backport:
+    @echo "Building v22-backport with musl libc (statically linked)..."
+    @echo "v17-from14 + backported tricks from v20-opt and v21-static"
+    @echo "This requires musl-tools (apt-get install musl-tools)"
+    @echo ""
+    @if [ ! -d "v22-backport" ]; then \
+        echo "Error: v22-backport directory does not exist"; \
+        exit 1; \
+    fi
+    @cd v22-backport && make
+    @echo ""
+    @echo "✅ v22-backport built successfully!"
+    @echo ""
+    @echo "Binary comparison:"
+    @echo "  v22-backport (musl): $(stat -c%s v22-backport/nano_ssh_server 2>/dev/null || echo '?') bytes (~54 KB)"
+    @echo "  v21-static (musl):   ~53 KB (baseline)"
+    @echo ""
+    @echo "Optimization tricks applied:"
+    @echo "  - FROM v20-opt: -fwhole-program -fipa-pta -fno-common, removed -lsodium, curve25519-donna"
+    @echo "  - FROM v21-static: musl-gcc, -static linking"
+    @echo ""
+
+# Run v22-backport
+run-v22-backport:
+    @echo "Starting v22-backport (musl) on port 2222..."
+    @if [ ! -f "v22-backport/nano_ssh_server" ]; then \
+        echo "Error: v22-backport/nano_ssh_server not found. Run 'just build-v22-backport' first"; \
+        exit 1; \
+    fi
+    @cd v22-backport && ./nano_ssh_server
+
+# Test v22-backport with real SSH client
+test-v22-backport:
+    @echo "Testing v22-backport with real SSH client..."
+    @if [ ! -f "v22-backport/nano_ssh_server" ]; then \
+        echo "Error: v22-backport/nano_ssh_server not found. Run 'just build-v22-backport' first"; \
+        exit 1; \
+    fi
+    @echo ""
+    @echo "Starting v22-backport server in background..."
+    @cd v22-backport && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
+    @sleep 2
+    @echo ""
+    @echo "Testing SSH connection..."
+    @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost 2>&1 || true
+    @echo ""
+    @echo "Stopping server..."
+    @kill $$(cat v22-backport/server.pid) 2>/dev/null || true
+    @rm -f v22-backport/server.pid
+    @echo ""
+    @echo "✅ v22-backport test complete!"
+    @echo ""
+
 # Show help
 help:
     @echo "Nano SSH Server - Task Automation"

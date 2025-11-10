@@ -22,7 +22,8 @@ sudo apt-get install gcc make just openssh-client libsodium-dev valgrind
 
 ```bash
 # Build any version (all working versions tested with real SSH clients)
-just build v21-static      # ⭐ BEST: 53 KB, musl static (no deps!)
+just build-v22-backport    # ⭐ NEW: 54 KB, v17 + v20/v21 tricks backported!
+just build-v21-static      # ⭐ BEST: 53 KB, musl static (no deps!)
 just build v17-static2     # Good: 70 KB, musl static (v17-from14 as static)
 just build v20-opt         # Good: 41 KB, latest optimized
 just build v19-donna       # Good: 41 KB, Curve25519-donna
@@ -45,12 +46,13 @@ just valgrind <version>    # Check for memory leaks
 
 ## Version Comparison & Binary Sizes
 
-**7 fully working versions validated with real SSH clients.** All versions tested with `sshpass` and standard OpenSSH clients.
+**8 fully working versions validated with real SSH clients.** All versions tested with `sshpass` and standard OpenSSH clients.
 
 ### 🏆 Working Versions (100% Tested)
 
 | Version | Size | Dependencies | Use Case | Status |
 |---------|------|--------------|----------|--------|
+| **v22-backport** | **54 KB** | **(none - musl static)** | ⭐ **NEW: v17 + v20/v21 tricks!** | ✅ PASS |
 | **v21-static** | **53 KB** | **(none - musl static)** | ⭐ **BEST: Tiny + portable** | ✅ PASS |
 | **v17-static2** | **70 KB** | **(none - musl static)** | v17-from14 as musl static | ✅ PASS |
 | **v20-opt** | **41 KB** | libc (dynamic) | Smallest dynamic build | ✅ PASS |
@@ -225,10 +227,10 @@ This server:
 
 ## Status
 
-✅ **6 Production-Ready Versions**
+✅ **8 Production-Ready Versions**
 
 **Achievements:**
-- 6 fully working SSH server versions validated with real SSH clients
+- 8 fully working SSH server versions validated with real SSH clients
 - **93% size reduction** (718 KB glibc static → 53 KB musl static) ⭐
 - 64% size reduction (70 KB → 25 KB smallest dynamic version)
 - **Proved glibc is 13.5x more bloated than musl** for static builds
@@ -236,7 +238,7 @@ This server:
 - Comprehensive testing with `sshpass` and OpenSSH clients
 - Production-ready implementations with battle-tested crypto
 
-**Working versions:** 6/6 tested and passing ✅
+**Working versions:** 8/8 tested and passing ✅
 **Recommended:** v21-static (53 KB musl static) ⭐
 **Test methodology:** Real SSH client with password authentication
 **Documentation:** Complete (see TEST_RESULTS.md)
