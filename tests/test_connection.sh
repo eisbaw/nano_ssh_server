@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test: Full SSH connection
 # Verifies that an SSH client can connect and receive "Hello World"
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build v14-static with musl libc
 # This builds libsodium with musl, then links v14-static statically
 # v14-crypto doesn't need OpenSSL (custom AES/SHA-256 implementation)

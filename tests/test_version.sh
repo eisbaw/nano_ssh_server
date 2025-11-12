@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test: SSH version exchange
 # Verifies that the server sends the SSH-2.0 version string
 

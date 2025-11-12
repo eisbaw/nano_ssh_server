@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Real SSH Client Test Plan for nano_ssh_server_complete.sh
 #

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Simple static build with musl - avoiding glibc header conflicts
 set -e
 

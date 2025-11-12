@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Cryptographic helper functions for BASH SSH server
 # Uses OpenSSL for all cryptographic operations

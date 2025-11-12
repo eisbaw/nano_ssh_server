@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # build-musl.sh - Build nano_ssh_server with musl libc
 # This creates a truly minimal static binary without glibc bloat
 

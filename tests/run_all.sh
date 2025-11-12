@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run all tests for a specific version
 # Usage: ./run_all.sh [version]
 

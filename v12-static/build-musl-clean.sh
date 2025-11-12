@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Clean static build with musl - using correct musl headers
 set -e
 

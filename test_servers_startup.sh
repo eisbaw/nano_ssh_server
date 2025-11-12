@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test if servers can start and listen on port 2222
 
 echo "=== Testing SSH Server Startup ==="

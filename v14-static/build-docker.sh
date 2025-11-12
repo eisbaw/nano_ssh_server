@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build v14-static with musl libc using Docker/Alpine
 # This builds in an Alpine container which uses musl libc natively
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test the working versions to see if they actually function
 
 echo "=== Testing Working SSH Server Versions ==="

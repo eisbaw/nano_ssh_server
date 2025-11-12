@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test: SSH authentication
 # Verifies that correct password works and wrong password fails
 

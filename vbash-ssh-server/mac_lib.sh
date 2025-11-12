@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Sourced library for MAC computation - for testing and comparison
 
 WORKDIR="${WORKDIR:-/tmp/mac_lib_$$}"

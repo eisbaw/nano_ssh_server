@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test MAC computation with known vectors from actual SSH session
 
 TESTDIR="/tmp/mac_test_$$"

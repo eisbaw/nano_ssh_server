@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test SSH server versions with real SSH client
 # All versions use port 2222, so we test sequentially
 

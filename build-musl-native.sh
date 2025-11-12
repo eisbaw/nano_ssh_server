@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build nano_ssh_server with musl libc on a glibc host
 # This builds libsodium and OpenSSL with musl, then links everything statically
 

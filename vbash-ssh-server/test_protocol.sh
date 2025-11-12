@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Manual SSH Protocol Tester
 # Tests each phase of the SSH protocol without needing an SSH client

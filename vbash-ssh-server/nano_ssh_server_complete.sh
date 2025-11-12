@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Nano SSH Server - COMPLETE Working Implementation in BASH
 # Proves that BASH CAN handle streaming crypto with state management

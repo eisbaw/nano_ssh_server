@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Comprehensive SSH Server Version Analysis Script
 
 echo "=== Building All Versions ==="

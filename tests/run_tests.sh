@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test runner for justfile compatibility
 # This is a wrapper around run_all.sh
 
