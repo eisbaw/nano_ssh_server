@@ -145,7 +145,7 @@ main() {
     # Check if server is running
     if ! check_server; then
         log_error "Please start the server first:"
-        log_error "  ./nano_ssh_server.sh"
+        log_error "  ./nano_ssh_server_complete.sh"
         exit 1
     fi
     echo ""

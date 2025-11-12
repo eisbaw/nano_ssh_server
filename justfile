@@ -343,16 +343,7 @@ test-v17-static2:
 # BASH SSH Server (vbash-ssh-server) - Shell Script Implementation
 # ============================================================================
 
-# Run BASH SSH server (simple version)
-run-bash-simple:
-    @echo "Starting BASH SSH Server (simple) on port 2222..."
-    @if [ ! -f "vbash-ssh-server/nano_ssh_server_simple.sh" ]; then \
-        echo "Error: vbash-ssh-server/nano_ssh_server_simple.sh not found"; \
-        exit 1; \
-    fi
-    @cd vbash-ssh-server && ./nano_ssh_server_simple.sh 2222
-
-# Run BASH SSH server (full version - working with real SSH clients)
+# Run BASH SSH server (complete working implementation)
 run-bash:
     @echo "Starting BASH SSH Server (full) on port 2222..."
     @if [ ! -f "vbash-ssh-server/nano_ssh_server_complete.sh" ]; then \
@@ -367,9 +358,9 @@ test-bash:
     @cd vbash-ssh-server && make check
     @echo ""
     @echo "To test manually:"
-    @echo "  Terminal 1: just run-bash-simple"
-    @echo "  Terminal 2: nc localhost 2222"
-    @echo "  You should see: SSH-2.0-BashSSH_0.1"
+    @echo "  Terminal 1: just run-bash"
+    @echo "  Terminal 2: ssh -p 2222 user@localhost (password: password123)"
+    @echo "  Expected: Hello World"
 
 # Clean BASH SSH server temporary files
 clean-bash:
@@ -398,8 +389,7 @@ help:
     @echo "  just build-v14-static     # 718 KB - glibc static (bloated!)"
     @echo ""
     @echo "BASH SSH Server:"
-    @echo "  just run-bash-simple      # Run BASH implementation (simple)"
-    @echo "  just run-bash             # Run BASH implementation (full)"
+    @echo "  just run-bash             # Run BASH implementation (complete)"
     @echo "  just test-bash            # Test BASH server"
     @echo ""
     @echo "Development:"

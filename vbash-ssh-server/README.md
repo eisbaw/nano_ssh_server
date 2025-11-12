@@ -21,7 +21,7 @@ An educational SSH server implementation written in BASH that demonstrates SSH p
 ### 1. Version Exchange (Phase 1) - **FULLY WORKING**
 
 ```bash
-$ ./nano_ssh_server_v2.sh 2222 &
+$ ./nano_ssh_server_complete.sh 2222 &
 $ echo "SSH-2.0-TestClient" | nc localhost 2222
 SSH-2.0-BashSSH_0.1  # ← Success!
 ```
@@ -115,10 +115,10 @@ After `SSH_MSG_NEWKEYS`, all packets must be:
 command -v bash openssl socat xxd dd awk sed
 
 # Make executable
-chmod +x nano_ssh_server.sh
+chmod +x nano_ssh_server_complete.sh
 
 # Optional: Install to /usr/local/bin
-sudo cp nano_ssh_server.sh /usr/local/bin/bash-ssh-server
+sudo cp nano_ssh_server_complete.sh /usr/local/bin/bash-ssh-server
 ```
 
 ## Usage
@@ -127,7 +127,7 @@ sudo cp nano_ssh_server.sh /usr/local/bin/bash-ssh-server
 
 ```bash
 # Terminal 1: Start server
-./nano_ssh_server_v2.sh 2222
+./nano_ssh_server_complete.sh 2222
 
 # Terminal 2: Test version exchange
 echo "SSH-2.0-TestClient" | nc localhost 2222
@@ -138,7 +138,7 @@ echo "SSH-2.0-TestClient" | nc localhost 2222
 
 ```bash
 # Start server
-./nano_ssh_server_v2.sh 2222
+./nano_ssh_server_complete.sh 2222
 
 # Try with SSH client (in another terminal)
 ssh -vvv -p 2222 user@localhost
@@ -190,7 +190,7 @@ The server:
 
 ```
 vbash-ssh-server/
-├── nano_ssh_server.sh       # Main server implementation
+├── nano_ssh_server_complete.sh       # Main server implementation
 ├── crypto_helpers.sh         # Cryptographic helper functions
 ├── ssh_packets.sh            # SSH packet encoding/decoding
 ├── README.md                 # This file
@@ -278,7 +278,7 @@ Enable verbose logging:
 
 ```bash
 # Set debug mode
-bash -x ./nano_ssh_server.sh
+bash -x ./nano_ssh_server_complete.sh
 
 # Watch server logs
 tail -f /var/log/syslog | grep "BASH SSH"

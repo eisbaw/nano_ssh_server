@@ -2,7 +2,7 @@
 
 ## Core Implementation Files
 
-### 1. `nano_ssh_server_v2.sh` (~400 LOC) ⭐ **RECOMMENDED**
+### 1. `nano_ssh_server_complete.sh` (~400 LOC) ⭐ **RECOMMENDED**
 
 The most complete implementation.
 
@@ -16,9 +16,9 @@ The most complete implementation.
 
 **Use when:** You want to see the full protocol flow
 
-**Start:** `./nano_ssh_server_v2.sh 2222`
+**Start:** `./nano_ssh_server_complete.sh 2222`
 
-### 2. `nano_ssh_server_simple.sh` (~80 LOC) 📚 **BEST FOR LEARNING**
+### 2. `nano_ssh_server_complete.sh` (~80 LOC) 📚 **BEST FOR LEARNING**
 
 Minimal version focusing on version exchange.
 
@@ -29,9 +29,9 @@ Minimal version focusing on version exchange.
 
 **Use when:** Learning SSH protocol basics
 
-**Start:** `./nano_ssh_server_simple.sh 2222`
+**Start:** `./nano_ssh_server_complete.sh 2222`
 
-### 3. `nano_ssh_server.sh` (~380 LOC) 🔧 **EXPERIMENTAL**
+### 3. `nano_ssh_server_complete.sh` (~380 LOC) 🔧 **EXPERIMENTAL**
 
 Original attempt with different approach.
 
@@ -42,7 +42,7 @@ Original attempt with different approach.
 
 **Use when:** Comparing different implementation approaches
 
-**Start:** `./nano_ssh_server.sh` (uses socat)
+**Start:** `./nano_ssh_server_complete.sh` (uses socat)
 
 ## Support Libraries
 
@@ -166,10 +166,10 @@ Guide to all files in the project.
 Want to...
 
 ├─ Try SSH server quickly?
-│  └─> Use: nano_ssh_server_simple.sh + QUICKSTART.md
+│  └─> Use: nano_ssh_server_complete.sh + QUICKSTART.md
 
 ├─ See full protocol flow?
-│  └─> Use: nano_ssh_server_v2.sh + README.md
+│  └─> Use: nano_ssh_server_complete.sh + README.md
 
 ├─ Understand limitations?
 │  └─> Read: ACTUAL_STATUS.md
@@ -191,19 +191,19 @@ Want to...
 
 ### For Beginners
 1. `QUICKSTART.md` - Fast start
-2. `nano_ssh_server_simple.sh` - Read the code
+2. `nano_ssh_server_complete.sh` - Read the code
 3. `README.md` - Full context
 4. Try it yourself!
 
 ### For Engineers
 1. `ACTUAL_STATUS.md` - Honest assessment
-2. `nano_ssh_server_v2.sh` - Full implementation
+2. `nano_ssh_server_complete.sh` - Full implementation
 3. `IMPLEMENTATION_NOTES.md` - Technical analysis
 4. Experiment with modifications
 
 ### For Students
 1. `README.md` - Overview
-2. `nano_ssh_server_simple.sh` - Simple version
+2. `nano_ssh_server_complete.sh` - Simple version
 3. `test_protocol.sh` - Testing approach
 4. `IMPLEMENTATION_NOTES.md` - Learn challenges
 
@@ -211,9 +211,9 @@ Want to...
 
 ```
 Implementation:
-  nano_ssh_server_v2.sh      ~12K   (complete protocol)
-  nano_ssh_server.sh         ~12K   (original attempt)
-  nano_ssh_server_simple.sh  ~4K    (minimal demo)
+  nano_ssh_server_complete.sh      ~12K   (complete protocol)
+  nano_ssh_server_complete.sh         ~12K   (original attempt)
+  nano_ssh_server_complete.sh  ~4K    (minimal demo)
   crypto_helpers.sh          ~6K    (crypto library)
   test_protocol.sh           ~5K    (protocol tester)
   test_server.sh             ~5K    (connection tester)
@@ -233,8 +233,8 @@ Total: ~85K source + docs
 
 | Task | Command |
 |------|---------|
-| Start simple server | `./nano_ssh_server_simple.sh 2222` |
-| Start full server | `./nano_ssh_server_v2.sh 2222` |
+| Start simple server | `./nano_ssh_server_complete.sh 2222` |
+| Start full server | `./nano_ssh_server_complete.sh 2222` |
 | Test version exchange | `echo "SSH-2.0-Test" \| nc localhost 2222` |
 | Run protocol tests | `./test_protocol.sh 2222` |
 | Check dependencies | `make check` |
@@ -260,6 +260,6 @@ Total: ~85K source + docs
 
 ---
 
-**Quick Start**: `./nano_ssh_server_simple.sh 2222`
+**Quick Start**: `./nano_ssh_server_complete.sh 2222`
 **Read First**: `QUICKSTART.md`
 **Full Docs**: `README.md`

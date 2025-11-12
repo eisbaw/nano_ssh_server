@@ -96,7 +96,7 @@ See `PROOF_OF_STATE.md` for runnable proof.
 
 ### Two Implementations
 
-#### 1. `nano_ssh_server.sh` - Full Attempt
+#### 1. `nano_ssh_server_complete.sh` - Full Attempt
 
 Attempts to implement as much as possible:
 - ✅ Version exchange
@@ -108,7 +108,7 @@ Attempts to implement as much as possible:
 
 **Use case**: Educational, shows protocol structure
 
-#### 2. `nano_ssh_server_simple.sh` - Minimal Demo
+#### 2. `nano_ssh_server_complete.sh` - Minimal Demo
 
 Focuses on what works well:
 - ✅ Version exchange
@@ -306,7 +306,7 @@ cat packet >&3  # Reuse process
 
 ```bash
 # Terminal 1: Start server
-./nano_ssh_server_simple.sh
+./nano_ssh_server_complete.sh
 
 # Terminal 2: Connect
 nc localhost 2222

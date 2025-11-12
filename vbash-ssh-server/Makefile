@@ -3,7 +3,7 @@
 
 .PHONY: all clean test run check install help
 
-SCRIPT_NAME = nano_ssh_server.sh
+SCRIPT_NAME = nano_ssh_server_complete.sh
 PORT = 2222
 
 all: check

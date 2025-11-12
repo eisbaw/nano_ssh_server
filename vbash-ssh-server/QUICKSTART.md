@@ -9,7 +9,7 @@ An **educational** SSH server implementation written entirely in BASH, demonstra
 ```bash
 # Terminal 1: Start the server
 cd vbash-ssh-server
-./nano_ssh_server_simple.sh 2222
+./nano_ssh_server_complete.sh 2222
 
 # Terminal 2: Test with netcat
 echo "SSH-2.0-TestClient" | nc localhost 2222
@@ -52,8 +52,8 @@ All these tools are standard on Linux/Unix systems.
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `nano_ssh_server_simple.sh` | Basic demo | ✅ Works |
-| `nano_ssh_server.sh` | Full attempt | ⚠️ Partial |
+| `nano_ssh_server_complete.sh` | Basic demo | ✅ Works |
+| `nano_ssh_server_complete.sh` | Full attempt | ⚠️ Partial |
 | `crypto_helpers.sh` | Crypto operations | 📚 Library |
 | `test_server.sh` | Test suite | ✅ Works |
 | `IMPLEMENTATION_NOTES.md` | Technical details | 📖 Read this! |
@@ -63,7 +63,7 @@ All these tools are standard on Linux/Unix systems.
 
 ```bash
 # Start server
-./nano_ssh_server_simple.sh
+./nano_ssh_server_complete.sh
 
 # In another terminal, try SSH client
 ssh -p 2222 user@localhost
@@ -125,7 +125,7 @@ sudo apt-get install openssl
 nc -z localhost 2222 && echo "Port in use" || echo "Port free"
 
 # Use a different port
-./nano_ssh_server_simple.sh 9999
+./nano_ssh_server_complete.sh 9999
 ```
 
 ## Support

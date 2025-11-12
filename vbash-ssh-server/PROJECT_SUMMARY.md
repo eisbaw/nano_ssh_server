@@ -8,13 +8,13 @@ Successfully created a **proof-of-concept SSH server implementation in BASH**, d
 
 ### Core Implementation Files
 
-1. **nano_ssh_server.sh** (~380 LOC)
+1. **nano_ssh_server_complete.sh** (~380 LOC)
    - Full SSH server attempt
    - Handles version exchange, KEXINIT, authentication, channels
    - Uses OpenBSD netcat, no xxd dependency
    - Demonstrates complete SSH protocol flow
 
-2. **nano_ssh_server_simple.sh** (~80 LOC)
+2. **nano_ssh_server_complete.sh** (~80 LOC)
    - Simplified demonstration version
    - Focuses on version exchange and basic packet handling
    - Better for learning and quick testing
@@ -64,7 +64,7 @@ Successfully created a **proof-of-concept SSH server implementation in BASH**, d
 
 ✅ **Working SSH Version Exchange**
 ```bash
-./nano_ssh_server_simple.sh 2222
+./nano_ssh_server_complete.sh 2222
 # Client connects
 Server sends: SSH-2.0-BashSSH_0.1
 Client sends: SSH-2.0-OpenSSH_8.x
@@ -178,8 +178,8 @@ just clean-bash         # Clean temporary files
 
 ```
 vbash-ssh-server/
-├── nano_ssh_server.sh              # Full implementation
-├── nano_ssh_server_simple.sh       # Simple demo
+├── nano_ssh_server_complete.sh              # Full implementation
+├── nano_ssh_server_complete.sh       # Simple demo
 ├── crypto_helpers.sh               # Crypto library
 ├── test_server.sh                  # Test suite
 ├── Makefile                        # Build interface
@@ -229,7 +229,7 @@ Created a **successful proof-of-concept** that:
 ## Testing Results
 
 ```bash
-$ ./nano_ssh_server_simple.sh 9999 &
+$ ./nano_ssh_server_complete.sh 9999 &
 [20:42:23] BASH SSH Server listening on port 9999
 
 $ echo "SSH-2.0-TestClient" | nc localhost 9999

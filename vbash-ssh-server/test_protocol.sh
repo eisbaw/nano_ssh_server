@@ -154,7 +154,7 @@ main() {
     # Check if server is running
     if ! nc -z localhost "$PORT" 2>/dev/null; then
         log_fail "Server not running on port $PORT"
-        log_info "Start server with: ./nano_ssh_server_v2.sh $PORT"
+        log_info "Start server with: ./nano_ssh_server_complete.sh $PORT"
         exit 1
     fi
 

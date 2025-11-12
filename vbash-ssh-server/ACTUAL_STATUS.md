@@ -5,7 +5,7 @@
 ### Version Exchange (Phase 1) - **WORKING**
 
 ```bash
-$ ./nano_ssh_server_v2.sh 8888 &
+$ ./nano_ssh_server_complete.sh 8888 &
 $ (echo "SSH-2.0-TestClient_1.0"; sleep 1) | nc localhost 8888
 SSH-2.0-BashSSH_0.1  # ← Success!
 ```
