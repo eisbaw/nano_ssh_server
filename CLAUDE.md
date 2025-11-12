@@ -47,6 +47,29 @@ nix-shell
 - ❌ "It works on my machine"
 - ✅ Everything in shell.nix
 
+**Portability Requirements:**
+
+All shell scripts MUST use portable shebangs for NixOS compatibility:
+
+```bash
+# ✅ CORRECT - Portable (works on NixOS, Ubuntu, etc.)
+#!/usr/bin/env bash
+
+# ❌ WRONG - Hard-coded path (breaks on NixOS)
+#!/bin/bash
+```
+
+**Why:**
+- NixOS doesn't have `/bin/bash` (bash is in `/nix/store/...`)
+- `/usr/bin/env` finds bash in PATH (works everywhere)
+- Ensures scripts work across all Linux distributions
+- Follows best practices for portable shell scripts
+
+**Rule:** When creating or modifying shell scripts:
+1. Always use `#!/usr/bin/env bash` shebang
+2. Never hard-code interpreter paths like `/bin/bash`
+3. This applies to all `.sh` files in the project
+
 ### 3. JUSTFILE IS THE INTERFACE
 
 **NEVER run raw commands. ALWAYS use `just`.**
