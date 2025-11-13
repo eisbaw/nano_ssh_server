@@ -1,8 +1,12 @@
 # Nano SSH Server
 
+⚠️ **EXPERIMENTAL / DEMO PROJECT - NOT FOR PRODUCTION USE** ⚠️
+
 World's smallest SSH server for microcontrollers - a minimal SSH-2.0 implementation that works with standard Linux SSH clients.
 
-**Achievement: 93% size reduction (718 KB static → 53 KB musl static) with 7 fully working versions validated with real SSH clients.**
+**This is a learning tool and proof-of-concept for size optimization research. It is NOT secure or suitable for real-world deployment.**
+
+**Achievement: 93% size reduction (718 KB static → 53 KB musl static) with 7 fully working demo versions validated with real SSH clients.**
 
 **Latest: v21-static proves musl is 13.5x smaller than glibc for static builds!**
 
@@ -225,21 +229,23 @@ This server:
 
 ## Status
 
-✅ **6 Production-Ready Versions**
+⚠️ **EXPERIMENTAL / DEMO PROJECT - NOT FOR PRODUCTION USE**
 
 **Achievements:**
-- 6 fully working SSH server versions validated with real SSH clients
+- 7 fully working SSH server versions validated with real SSH clients
 - **93% size reduction** (718 KB glibc static → 53 KB musl static) ⭐
 - 64% size reduction (70 KB → 25 KB smallest dynamic version)
 - **Proved glibc is 13.5x more bloated than musl** for static builds
 - 100% test pass rate for all working versions
 - Comprehensive testing with `sshpass` and OpenSSH clients
-- Production-ready implementations with battle-tested crypto
+- Demonstrates minimal SSH implementation techniques
 
-**Working versions:** 6/6 tested and passing ✅
-**Recommended:** v21-static (53 KB musl static) ⭐
+**Working versions:** 7/7 tested and passing ✅
+**Recommended for experimentation:** v21-static (53 KB musl static) ⭐
 **Test methodology:** Real SSH client with password authentication
 **Documentation:** Complete (see TEST_RESULTS.md)
+
+**This is a proof-of-concept and learning tool, NOT suitable for production environments.**
 
 ## References
 

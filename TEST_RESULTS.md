@@ -1,5 +1,7 @@
 # SSH Server Version Test Results
 
+⚠️ **EXPERIMENTAL PROJECT - Test results for demonstration purposes only**
+
 Test Date: 2025-11-09
 Test Script: `test_ssh_versions_final.sh`
 
@@ -8,6 +10,8 @@ Test Script: `test_ssh_versions_final.sh`
 **Overall Results: 5/9 PASS (55%)**
 
 All versions tested with real SSH client using sshpass and port 2222.
+
+**Note:** These are educational/demo implementations. Do not use in production environments.
 
 ## Detailed Results
 
@@ -81,11 +85,13 @@ All 9 versions successfully built:
 
 ## Recommendations
 
-1. **Use passing versions for production/testing**: v0-vanilla, v12-static, v17-from14, v19-donna, v20-opt
+⚠️ **Note: This is an experimental/demo project. None of these versions are suitable for production use.**
+
+1. **For experimentation and learning**: v0-vanilla, v12-static, v17-from14, v19-donna, v20-opt
 2. **Investigate RSA implementations** in v15-crypto and v16-crypto-standalone
 3. **Fix Ed25519 signature** in v18-selfcontained
 4. **Relax optimizations** in v14-opt12 to fix segfault
-5. **Consider v19-donna or v20-opt** as the recommended versions (both pass, reasonable size)
+5. **For size optimization research**: Consider v19-donna or v20-opt as reference implementations (both pass tests, reasonable size)
 
 ## Success Rate by Category
 
