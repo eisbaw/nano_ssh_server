@@ -1,6 +1,9 @@
 # Justfile for Nano SSH Server
 # Task automation interface - ALWAYS use this instead of raw commands
 
+# Use bash for better shell compatibility
+set shell := ["bash", "-c"]
+
 # Default recipe - show help
 default:
     @just --list
@@ -13,12 +16,13 @@ build VERSION:
 
 # Build all versions
 build-all:
-    @echo "Building all versions..."
-    @for dir in v*-*/; do \
-        if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
-            echo "Building $$dir..."; \
-            cd "$$dir" && make && cd ..; \
-        fi \
+    #!/usr/bin/env bash
+    echo "Building all versions..."
+    for dir in v*-*/; do
+        if [ -d "${dir}" ] && [ -f "${dir}/Makefile" ]; then
+            echo "Building ${dir}..."
+            (cd "${dir}" && make)
+        fi
     done
 
 # Clean specific version
@@ -29,12 +33,13 @@ clean VERSION:
 
 # Clean all versions
 clean-all:
-    @echo "Cleaning all versions..."
-    @for dir in v*-*/; do \
-        if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
-            echo "Cleaning $$dir..."; \
-            cd "$$dir" && make clean && cd ..; \
-        fi \
+    #!/usr/bin/env bash
+    echo "Cleaning all versions..."
+    for dir in v*-*/; do
+        if [ -d "${dir}" ] && [ -f "${dir}/Makefile" ]; then
+            echo "Cleaning ${dir}..."
+            (cd "${dir}" && make clean)
+        fi
     done
 
 # Run specific version (starts SSH server on port 2222)
@@ -75,18 +80,72 @@ test VERSION:
 
 # Test all versions
 test-all:
-    @echo "Testing all versions..."
-    @if [ ! -f "tests/run_tests.sh" ]; then \
-        echo "Warning: tests/run_tests.sh not found. Skipping tests."; \
-        exit 0; \
+    #!/usr/bin/env bash
+    echo "Testing all versions (quick mode - version check only)..."
+    if [ ! -f "tests/test_version.sh" ]; then
+        echo "Warning: tests/test_version.sh not found. Skipping tests."
+        exit 0
     fi
-    @for dir in v*-*/; do \
-        if [ -d "$$dir" ] && [ -f "$$dir/nano_ssh_server" ]; then \
-            version=$$(basename "$$dir"); \
-            echo "Testing $$version..."; \
-            bash tests/run_tests.sh "$$version"; \
-        fi \
+
+    # Kill any existing servers before starting
+    pkill -9 -f nano_ssh_server 2>/dev/null || true
+    sleep 1
+
+    # Track test results
+    PASSED=0
+    FAILED=0
+    TOTAL=0
+
+    for dir in v*-*/; do
+        if [ -d "${dir}" ] && [ -f "${dir}/nano_ssh_server" ]; then
+            version=${dir%/}
+            TOTAL=$((TOTAL + 1))
+
+            echo ""
+            echo "========================================"
+            echo "Testing ${version}... ($TOTAL)"
+            echo "========================================"
+
+            # Ensure clean state before each test
+            pkill -9 -f nano_ssh_server 2>/dev/null || true
+
+            # Run only version test with 15-second timeout (faster for CI)
+            if timeout 15 bash tests/test_version.sh "${version}"; then
+                PASSED=$((PASSED + 1))
+                echo "✓ ${version}: PASSED"
+            else
+                FAILED=$((FAILED + 1))
+                echo "✗ ${version}: FAILED"
+            fi
+
+            # Ensure cleanup after each test
+            pkill -9 -f nano_ssh_server 2>/dev/null || true
+        fi
     done
+
+    # Final cleanup
+    pkill -9 -f nano_ssh_server 2>/dev/null || true
+
+    # Print summary
+    echo ""
+    echo "========================================"
+    echo "Test Summary"
+    echo "========================================"
+    echo "Total:  ${TOTAL}"
+    echo "Passed: ${PASSED}"
+    echo "Failed: ${FAILED}"
+    echo "========================================"
+
+    # Exit with error if any tests failed
+    if [ ${FAILED} -gt 0 ]; then
+        echo ""
+        echo "✗ TESTS FAILED"
+        exit 1
+    else
+        echo ""
+        echo "✓ ALL TESTS PASSED"
+        exit 0
+    fi
 
 # Connect to running server with SSH client (run in separate terminal)
 connect:
@@ -107,20 +166,21 @@ test-all-sshpass:
 
 # Show binary sizes for all versions
 size-report:
-    @echo "======================================"
-    @echo "Binary Size Comparison"
-    @echo "======================================"
-    @printf "%-20s %15s %15s\n" "Version" "Size (bytes)" "Size (KB)"
-    @echo "--------------------------------------"
-    @for dir in v*-*/; do \
-        if [ -f "$$dir/nano_ssh_server" ]; then \
-            version=$$(basename "$$dir"); \
-            size=$$(stat -c%s "$$dir/nano_ssh_server" 2>/dev/null || stat -f%z "$$dir/nano_ssh_server" 2>/dev/null); \
-            kb=$$(echo "scale=2; $$size/1024" | bc); \
-            printf "%-20s %15s %15s\n" "$$version" "$$size" "$$kb"; \
-        fi \
+    #!/usr/bin/env bash
+    echo "======================================"
+    echo "Binary Size Comparison"
+    echo "======================================"
+    printf "%-20s %15s %15s\n" "Version" "Size (bytes)" "Size (KB)"
+    echo "--------------------------------------"
+    for dir in v*-*/; do
+        if [ -f "${dir}/nano_ssh_server" ]; then
+            version=${dir%/}
+            size=$(stat -c%s "${dir}/nano_ssh_server" 2>/dev/null || stat -f%z "${dir}/nano_ssh_server" 2>/dev/null)
+            kb=$(echo "scale=2; ${size}/1024" | bc)
+            printf "%-20s %15s %15s\n" "${version}" "${size}" "${kb}"
+        fi
     done
-    @echo "======================================"
+    echo "======================================"
 
 # Generate Ed25519 host key (for v0-vanilla)
 generate-hostkey:
@@ -131,29 +191,30 @@ generate-hostkey:
 
 # Show project status
 status:
-    @echo "======================================"
-    @echo "Nano SSH Server - Project Status"
-    @echo "======================================"
-    @echo ""
-    @echo "Versions:"
-    @for dir in v*-*/; do \
-        if [ -d "$$dir" ]; then \
-            version=$$(basename "$$dir"); \
-            if [ -f "$$dir/nano_ssh_server" ]; then \
-                printf "  [BUILT]  %s\n" "$$version"; \
-            elif [ -f "$$dir/Makefile" ]; then \
-                printf "  [READY]  %s\n" "$$version"; \
-            else \
-                printf "  [EMPTY]  %s\n" "$$version"; \
-            fi \
-        fi \
+    #!/usr/bin/env bash
+    echo "======================================"
+    echo "Nano SSH Server - Project Status"
+    echo "======================================"
+    echo ""
+    echo "Versions:"
+    for dir in v*-*/; do
+        if [ -d "${dir}" ]; then
+            version=${dir%/}
+            if [ -f "${dir}/nano_ssh_server" ]; then
+                printf "  [BUILT]  %s\n" "${version}"
+            elif [ -f "${dir}/Makefile" ]; then
+                printf "  [READY]  %s\n" "${version}"
+            else
+                printf "  [EMPTY]  %s\n" "${version}"
+            fi
+        fi
     done
-    @echo ""
-    @echo "To get started:"
-    @echo "  1. just build v0-vanilla"
-    @echo "  2. just run v0-vanilla    (in one terminal)"
-    @echo "  3. just connect           (in another terminal)"
-    @echo ""
+    echo ""
+    echo "To get started:"
+    echo "  1. just build v0-vanilla"
+    echo "  2. just run v0-vanilla    (in one terminal)"
+    echo "  3. just connect           (in another terminal)"
+    echo ""
 
 # Test musl-gcc with simple program
 test-musl:

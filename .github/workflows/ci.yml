@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, claude/** ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build and Test All Versions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v10
+        with:
+          logger: pretty
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v4
+
+      - name: Verify Nix installation
+        run: |
+          nix --version
+          which nix-shell
+
+      - name: List available versions
+        run: |
+          echo "Available SSH server versions:"
+          find . -maxdepth 1 -type d -name "v*-*" | sort | sed 's|^\./||'
+
+      - name: Build all versions
+        run: |
+          nix-shell --run "just build-all"
+
+      - name: Show binary sizes
+        run: |
+          nix-shell --run "just size-report"
+
+      - name: Test all versions
+        run: |
+          nix-shell --run "just test-all"
+
+      - name: Show project status
+        if: always()
+        run: |
+          nix-shell --run "just status"
