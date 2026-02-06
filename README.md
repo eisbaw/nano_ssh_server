@@ -252,4 +252,4 @@ This server:
 
 ## License
 
-TBD
+MIT License - See [LICENSE](LICENSE) file
