@@ -6,7 +6,7 @@ set -e
 
 VERSION=${1:-v0-vanilla}
 PORT=2222
-TIMEOUT=5
+TIMEOUT=3
 
 echo "========================================"
 echo "Test: SSH Version Exchange"
@@ -20,9 +20,8 @@ if [ ! -f "$VERSION/nano_ssh_server" ]; then
     exit 1
 fi
 
-# Kill any existing server on the port
-pkill -f nano_ssh_server || true
-sleep 1
+# Kill any existing server on the port (force kill)
+pkill -9 -f nano_ssh_server 2>/dev/null || true
 
 # Start the server in background
 echo "Starting server..."
@@ -31,22 +30,22 @@ cd $VERSION
 SERVER_PID=$!
 cd ..
 
-# Wait for server to be ready
-sleep 2
+# Wait for server to be ready (reduced from 2s to 1s)
+sleep 1
 
 # Check if server is still running
 if ! kill -0 $SERVER_PID 2>/dev/null; then
     echo "ERROR: Server failed to start"
-    cat $VERSION/test_version.log
+    cat $VERSION/test_version.log 2>/dev/null || echo "(no log file)"
     exit 1
 fi
 
 # Test version exchange with netcat
 echo "Testing version exchange..."
-RESPONSE=$(echo "" | timeout $TIMEOUT nc localhost $PORT | head -n 1)
+RESPONSE=$(echo "" | timeout $TIMEOUT nc localhost $PORT 2>/dev/null | head -n 1)
 
-# Kill the server
-kill $SERVER_PID 2>/dev/null || true
+# Kill the server (force kill to ensure cleanup)
+kill -9 $SERVER_PID 2>/dev/null || true
 wait $SERVER_PID 2>/dev/null || true
 
 # Verify response
@@ -57,6 +56,6 @@ if echo "$RESPONSE" | grep -q "SSH-2.0"; then
 else
     echo "✗ FAIL: Did not receive SSH-2.0 version string"
     echo "  Response: $RESPONSE"
-    cat $VERSION/test_version.log
+    cat $VERSION/test_version.log 2>/dev/null || echo "(no log file)"
     exit 1
 fi

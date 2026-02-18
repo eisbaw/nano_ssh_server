@@ -22,7 +22,7 @@ run_test() {
     TOTAL=$((TOTAL + 1))
 
     echo ""
-    if bash "$test_script" "$VERSION"; then
+    if timeout 20 bash "$test_script" "$VERSION"; then
         PASSED=$((PASSED + 1))
         echo "✓ $test_name: PASSED"
     else
@@ -30,9 +30,8 @@ run_test() {
         echo "✗ $test_name: FAILED"
     fi
 
-    # Clean up any lingering processes
-    pkill -f nano_ssh_server 2>/dev/null || true
-    sleep 1
+    # Clean up any lingering processes (force kill)
+    pkill -9 -f nano_ssh_server 2>/dev/null || true
 }
 
 # Run all tests
