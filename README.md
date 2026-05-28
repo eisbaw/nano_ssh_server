@@ -10,8 +10,8 @@ The smallest working build is 24 KB (dynamic) or 53 KB (musl, fully static).
 
 ```bash
 nix-shell                       # enters dev environment
-just build v21-static           # recommended: musl static, 53 KB
-just run v21-static             # listens on 2222
+just build v22-static           # recommended: musl static, 50 KB
+just run v22-static             # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -25,17 +25,28 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version     | Bytes   | Size   | Linkage                | Notes                                |
 |-------------|---------|--------|------------------------|--------------------------------------|
-| v17-from14  |  25,248 |  24 KB | dynamic, glibc         | Smallest build; needs libc at runtime|
+| v22-c25519  |  25,272 |  25 KB | dynamic, glibc         | Smallest self-contained dynamic build (libc only) |
+| v17-from14  |  25,248 |  24 KB | dynamic, glibc+libsodium | Smaller on disk, but needs libsodium at runtime |
 | v20-opt     |  41,288 |  40 KB | dynamic, glibc         | Compiler + linker optimizations      |
 | v19-donna   |  45,720 |  44 KB | dynamic, glibc         | Curve25519-donna implementation      |
-| v21-static  |  54,344 |  53 KB | static, musl           | Recommended: portable, zero runtime deps |
+| v22-static  |  51,008 |  50 KB | static, musl           | Recommended: c25519 ladder, zero runtime deps |
+| v21-static  |  54,344 |  53 KB | static, musl           | Curve25519-donna, zero runtime deps  |
 | v17-static2 |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
 | v0-vanilla  | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
 
+`v22-c25519`/`v22-static` replace `v19-donna`/`v21-static`'s 20 KB
+`curve25519-donna-c64` X25519 with the small public-domain c25519 Montgomery
+ladder (Daniel Beer), which reuses the f25519 field arithmetic already linked
+for Ed25519. That removes ~20 KB of code, halving the self-contained dynamic
+build. Note `v17-from14` is smaller on disk only because it dynamically links
+libsodium — it is not self-contained, so `v22-c25519` is the smallest build
+that runs against libc alone.
+
 A musl-static build is roughly an order of magnitude smaller than the same code
-linked against glibc-static. The glibc-static "comparison baseline" (formerly
-v12-static, ~718 KB) was removed because it does not build on NixOS due to a
-glibc ABI mismatch; see git history.
+linked against glibc-static. In static builds musl libc dominates the binary
+(~33 KB), so the crypto saving is only ~6% there. The glibc-static "comparison
+baseline" (formerly v12-static, ~718 KB) was removed because it does not build
+on NixOS due to a glibc ABI mismatch; see git history.
 
 ## Protocol
 
@@ -77,11 +88,13 @@ version that does not produce that string is considered broken.
 ```
 nano_ssh_server/
 ├── v0-vanilla/        reference implementation
-├── v17-from14/        custom-crypto dynamic
+├── v17-from14/        custom-crypto dynamic (still links libsodium)
 ├── v17-static2/       custom-crypto musl static
 ├── v19-donna/         Curve25519-donna
 ├── v20-opt/           compiler-optimized dynamic
-├── v21-static/        recommended: musl static
+├── v21-static/        Curve25519-donna musl static
+├── v22-c25519/        c25519 ladder, dynamic, libc-only (smallest self-contained)
+├── v22-static/        recommended: c25519 ladder, musl static
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
 ├── tests/             test scripts driven by justfile recipes
@@ -94,10 +107,10 @@ nano_ssh_server/
 
 ## Status
 
-Six production versions are validated end-to-end against a real OpenSSH client
+Eight production versions are validated end-to-end against a real OpenSSH client
 on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`, `v19-donna`,
-`v20-opt`, `v21-static`. The intermediate `v8`–`v15` directories also build and
-pass; they document the step-by-step size progression.
+`v20-opt`, `v21-static`, `v22-c25519`, `v22-static`. The intermediate `v8`–`v15`
+directories also build and pass; they document the step-by-step size progression.
 
 Versions whose optimization broke the server were removed (recoverable from git
 history):

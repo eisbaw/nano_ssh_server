@@ -22,6 +22,8 @@ VERSIONS=(
     "v19-donna:Curve25519-donna"
     "v20-opt:Optimized dynamic"
     "v21-static:Recommended musl static"
+    "v22-c25519:c25519 ladder, dynamic, libc-only"
+    "v22-static:c25519 ladder, musl static"
 )
 
 # Stats
