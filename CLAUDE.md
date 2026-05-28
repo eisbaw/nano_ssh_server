@@ -165,6 +165,15 @@ echo "v3-opt2: 45678 bytes (-12% from v2)" >> size_log.txt
 - Change from previous version
 - What optimization caused the change
 
+**FORBIDDEN: executable compression (UPX) is cheating.**
+
+Do NOT use UPX or any runtime self-decompression to win the size comparison.
+UPX only shrinks the on-disk file: at startup the whole binary is decompressed
+back into RAM, so the in-RAM/flash-execution footprint (the thing that actually
+matters on a microcontroller) is unchanged or larger. Size numbers in this
+project mean the real, uncompressed binary. Never report or commit `.upx`
+binaries as a size result.
+
 ---
 
 ## Prerequisites: SSH Client Tools

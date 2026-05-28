@@ -24,6 +24,8 @@ VERSIONS=(
     "v21-static:Recommended musl static"
     "v22-c25519:c25519 ladder, dynamic, libc-only"
     "v22-static:c25519 ladder, musl static"
+    "v23-scratch:Smallest dynamic: from-scratch 378-line main"
+    "v23-min:Smallest overall: scratch main + nolibc freestanding, fully static"
 )
 
 # Stats
