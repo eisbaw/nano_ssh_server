@@ -130,5 +130,5 @@ fi
 echo ""
 echo "=============================================="
 
-# Return success if at least some passed
-[ $PASSED -gt 0 ]
+# Fail if any tested version failed, or if none ran at all.
+[ $FAILED -eq 0 ] && [ $PASSED -gt 0 ]

@@ -45,6 +45,10 @@ jobs:
         run: |
           nix-shell --run "just test-all"
 
+      - name: End-to-end test with real SSH client
+        run: |
+          nix-shell --run "just test-all-sshpass"
+
       - name: Show project status
         if: always()
         run: |
