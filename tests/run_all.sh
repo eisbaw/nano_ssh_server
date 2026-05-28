@@ -31,7 +31,7 @@ run_test() {
     fi
 
     # Clean up any lingering processes
-    pkill -f nano_ssh_server 2>/dev/null || true
+    pkill -x nano_ssh_server 2>/dev/null || true
     sleep 1
 }
 

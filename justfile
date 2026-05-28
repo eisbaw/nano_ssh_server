@@ -83,13 +83,16 @@ test-all:
         echo "Warning: tests/run_tests.sh not found. Skipping tests."; \
         exit 0; \
     fi
-    @for dir in v*-*/; do \
-        if [ -d "$$dir" ] && [ -f "$$dir/nano_ssh_server" ]; then \
-            version=$$(basename "$$dir"); \
-            echo "Testing $$version..."; \
-            bash tests/run_tests.sh "$$version"; \
-        fi \
-    done
+    @failed=""; \
+    for dir in v*-*/; do \
+        if [ -f "$dir/nano_ssh_server" ]; then \
+            version=$(basename "$dir"); \
+            echo "Testing $version..."; \
+            bash tests/run_tests.sh "$version" || failed="$failed $version"; \
+        fi; \
+    done; \
+    if [ -n "$failed" ]; then echo "Tests failed for:$failed"; exit 1; fi; \
+    echo "All version tests passed."
 
 # Connect to running server with SSH client (run in separate terminal)
 connect:
@@ -116,11 +119,11 @@ size-report:
     @printf "%-20s %15s %15s\n" "Version" "Size (bytes)" "Size (KB)"
     @echo "--------------------------------------"
     @for dir in v*-*/; do \
-        if [ -f "$$dir/nano_ssh_server" ]; then \
-            version=$$(basename "$$dir"); \
-            size=$$(stat -c%s "$$dir/nano_ssh_server" 2>/dev/null || stat -f%z "$$dir/nano_ssh_server" 2>/dev/null); \
-            kb=$$(echo "scale=2; $$size/1024" | bc); \
-            printf "%-20s %15s %15s\n" "$$version" "$$size" "$$kb"; \
+        if [ -f "$dir/nano_ssh_server" ]; then \
+            version=$(basename "$dir"); \
+            size=$(stat -c%s "$dir/nano_ssh_server" 2>/dev/null || stat -f%z "$dir/nano_ssh_server" 2>/dev/null); \
+            kb=$(echo "scale=2; $size/1024" | bc); \
+            printf "%-20s %15s %15s\n" "$version" "$size" "$kb"; \
         fi \
     done
     @echo "======================================"
@@ -140,14 +143,14 @@ status:
     @echo ""
     @echo "Versions:"
     @for dir in v*-*/; do \
-        if [ -d "$$dir" ]; then \
-            version=$$(basename "$$dir"); \
-            if [ -f "$$dir/nano_ssh_server" ]; then \
-                printf "  [BUILT]  %s\n" "$$version"; \
-            elif [ -f "$$dir/Makefile" ]; then \
-                printf "  [READY]  %s\n" "$$version"; \
+        if [ -d "$dir" ]; then \
+            version=$(basename "$dir"); \
+            if [ -f "$dir/nano_ssh_server" ]; then \
+                printf "  [BUILT]  %s\n" "$version"; \
+            elif [ -f "$dir/Makefile" ]; then \
+                printf "  [READY]  %s\n" "$version"; \
             else \
-                printf "  [EMPTY]  %s\n" "$$version"; \
+                printf "  [EMPTY]  %s\n" "$version"; \
             fi \
         fi \
     done
@@ -175,7 +178,7 @@ test-musl:
     @echo ""
     @echo "Size comparison with glibc:"
     @gcc -static -Os test_musl.c -o test_glibc 2>/dev/null || true
-    @ls -lh test_musl test_glibc 2>/dev/null | awk '{print $$9 " : " $$5}' || true
+    @ls -lh test_musl test_glibc 2>/dev/null | awk '{print $9 " : " $5}' || true
     @rm -f test_glibc
     @echo ""
     @echo "✅ musl-gcc works! See MUSL_TEST_RESULTS.md for details."
@@ -213,14 +216,14 @@ test-v21-static:
     fi
     @echo ""
     @echo "Starting v21-static server in background..."
-    @cd v21-static && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
+    @cd v21-static && ./nano_ssh_server > server_test.log 2>&1 & echo $! > server.pid
     @sleep 2
     @echo ""
     @echo "Testing SSH connection..."
     @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost 2>&1 || true
     @echo ""
     @echo "Stopping server..."
-    @kill $$(cat v21-static/server.pid) 2>/dev/null || true
+    @kill $(cat v21-static/server.pid) 2>/dev/null || true
     @rm -f v21-static/server.pid
     @echo ""
     @echo "✅ v21-static test complete!"
@@ -262,14 +265,14 @@ test-v17-static2:
     fi
     @echo ""
     @echo "Starting v17-static2 server in background..."
-    @cd v17-static2 && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
+    @cd v17-static2 && ./nano_ssh_server > server_test.log 2>&1 & echo $! > server.pid
     @sleep 2
     @echo ""
     @echo "Testing SSH connection..."
     @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost 2>&1 || true
     @echo ""
     @echo "Stopping server..."
-    @kill $$(cat v17-static2/server.pid) 2>/dev/null || true
+    @kill $(cat v17-static2/server.pid) 2>/dev/null || true
     @rm -f v17-static2/server.pid
     @echo ""
     @echo "✅ v17-static2 test complete!"

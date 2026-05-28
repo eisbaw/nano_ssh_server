@@ -20,8 +20,11 @@ if [ ! -f "$VERSION/nano_ssh_server" ]; then
     exit 1
 fi
 
-# Kill any existing server on the port
-pkill -f nano_ssh_server || true
+# Kill any leftover server from a crashed prior run. Exact-name match (-x):
+# -f would match any process whose command line contains the project path
+# (e.g. the CI workspace). Note: the binary name must stay <=15 chars or the
+# kernel comm is truncated and -x stops matching.
+pkill -x nano_ssh_server || true
 sleep 1
 
 # Start the server in background

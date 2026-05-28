@@ -20,8 +20,9 @@ if [ ! -f "$VERSION/nano_ssh_server" ]; then
     exit 1
 fi
 
-# Kill any existing server on the port
-pkill -f nano_ssh_server || true
+# Kill any existing server (exact name; -f would match unrelated processes
+# whose command line contains the project path, e.g. on CI runners)
+pkill -x nano_ssh_server || true
 sleep 1
 
 # Test 1: Wrong password should fail
@@ -41,6 +42,7 @@ fi
 
 # Try to connect with wrong password (should fail)
 timeout $TIMEOUT sshpass -p wrongpassword ssh \
+    -F none \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR \
@@ -77,6 +79,7 @@ fi
 
 # Try to connect with correct password (should succeed)
 OUTPUT=$(timeout $TIMEOUT sshpass -p password123 ssh \
+    -F none \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR \

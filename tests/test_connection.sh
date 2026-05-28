@@ -20,8 +20,9 @@ if [ ! -f "$VERSION/nano_ssh_server" ]; then
     exit 1
 fi
 
-# Kill any existing server on the port
-pkill -f nano_ssh_server || true
+# Kill any existing server (exact name; -f would match unrelated processes
+# whose command line contains the project path, e.g. on CI runners)
+pkill -x nano_ssh_server || true
 sleep 1
 
 # Start the server in background
@@ -46,6 +47,7 @@ echo "Testing SSH connection (user: user, password: password123)..."
 
 # Capture output from SSH session
 OUTPUT=$(timeout $TIMEOUT sshpass -p password123 ssh \
+    -F none \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR \

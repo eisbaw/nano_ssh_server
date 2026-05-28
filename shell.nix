@@ -35,6 +35,7 @@ pkgs.mkShell {
     # Utilities
     xxd
     coreutils
+    bc           # used by `just size-report` for KB calculation
 
     # Cryptography libraries
     libsodium    # For Curve25519, Ed25519, HMAC-SHA256
