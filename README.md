@@ -123,10 +123,12 @@ nano_ssh_server/
 
 ## Status
 
-Eight production versions are validated end-to-end against a real OpenSSH client
+Ten production versions are validated end-to-end against a real OpenSSH client
 on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`, `v19-donna`,
-`v20-opt`, `v21-static`, `v22-c25519`, `v22-static`. The intermediate `v8`–`v15`
-directories also build and pass; they document the step-by-step size progression.
+`v20-opt`, `v21-static`, `v22-c25519`, `v22-static`, `v23-scratch`, `v23-min`.
+The intermediate `v8`–`v15` and the other `v23-*` size experiments
+(debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
+build and pass; they document the step-by-step size progression.
 
 Versions whose optimization broke the server were removed (recoverable from git
 history):
@@ -135,6 +137,9 @@ history):
 - `v10-opt9`, `v13-opt11`: custom linker scripts that omitted required ELF
   sections, producing binaries that segfaulted before `main`.
 - `v12-static`, `v14-static`: glibc-static builds that do not link on NixOS.
+- `v23-clang`, `v23-lld-icf`: needed clang/lld outside the Nix dev shell;
+  `v23-clang` was also larger than gcc `-Os` (clang `-Oz` miscompiled the inline
+  crypto under LTO).
 
 The `vbash-ssh-server/` directory is an unrelated shell-script proof of
 concept.

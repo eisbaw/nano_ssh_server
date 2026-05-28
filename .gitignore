@@ -5,6 +5,10 @@
 nano_ssh_server
 nano_ssh_server.upx
 *.upx
+nano_ssh_server.*
+*.stripped
+*.sstripped
+*.orig
 test_crypto
 test_musl
 test_glibc
