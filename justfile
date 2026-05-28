@@ -177,87 +177,20 @@ test-musl:
     @echo ""
     @echo "✅ musl-gcc works! See MUSL_TEST_RESULTS.md for details."
 
-# Build with musl libc (native, no Docker)
-build-musl:
-    @echo "Building full SSH server with musl libc..."
-    @echo "⚠️  Note: This requires building OpenSSL and libsodium from source"
-    @echo "    For a quick test, run: just test-musl"
-    @echo ""
-    @./build-musl-native.sh
-
-# Clean musl build artifacts
+# Clean musl test artifacts
 clean-musl:
-    @echo "Cleaning musl build..."
     @rm -rf build-musl test_musl test_glibc
-    @echo "Cleaned musl build artifacts"
+    @echo "Cleaned musl test artifacts"
 
-# Build v14-static with musl (requires musl-tools and static libsodium)
-build-v14-static:
-    @echo "Building v14-static with musl libc..."
-    @echo "This requires musl-tools and statically compiled libsodium"
-    @echo ""
-    @if [ ! -d "v14-static" ]; then \
-        echo "Error: v14-static directory does not exist"; \
-        exit 1; \
-    fi
-    @cd v14-static && make
-    @echo ""
-    @echo "✅ v14-static built successfully!"
-    @echo ""
-    @ls -lh v14-static/nano_ssh_server
-    @echo ""
-
-# Run v14-static
-run-v14-static:
-    @echo "Starting v14-static on port 2222..."
-    @if [ ! -f "v14-static/nano_ssh_server" ]; then \
-        echo "Error: v14-static/nano_ssh_server not found. Run 'just build-v14-static' first"; \
-        exit 1; \
-    fi
-    @cd v14-static && ./nano_ssh_server
-
-# Test v14-static with real SSH client
-test-v14-static:
-    @echo "Testing v14-static with real SSH client..."
-    @if [ ! -f "v14-static/nano_ssh_server" ]; then \
-        echo "Error: v14-static/nano_ssh_server not found. Run 'just build-v14-static' first"; \
-        exit 1; \
-    fi
-    @echo ""
-    @echo "Starting v14-static server in background..."
-    @cd v14-static && ./nano_ssh_server > server_test.log 2>&1 & echo $$! > server.pid
-    @sleep 2
-    @echo ""
-    @echo "Testing SSH connection..."
-    @sshpass -p password123 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 user@localhost "echo 'Connection successful!'" || true
-    @echo ""
-    @echo "Stopping server..."
-    @kill $$(cat v14-static/server.pid) 2>/dev/null || true
-    @rm -f v14-static/server.pid
-    @echo ""
-    @echo "Server output:"
-    @cat v14-static/server_test.log
-    @echo ""
-
-# Build v21-static with musl (requires musl-tools)
+# Build v21-static with musl (requires musl-gcc from shell.nix)
 build-v21-static:
     @echo "Building v21-static with musl libc (statically linked)..."
-    @echo "This requires musl-tools (apt-get install musl-tools)"
-    @echo ""
     @if [ ! -d "v21-static" ]; then \
         echo "Error: v21-static directory does not exist"; \
         exit 1; \
     fi
     @cd v21-static && make
-    @echo ""
-    @echo "✅ v21-static built successfully!"
-    @echo ""
-    @echo "Binary comparison:"
-    @echo "  v21-static (musl):  $(stat -c%s v21-static/nano_ssh_server 2>/dev/null || echo '?') bytes (~53 KB)"
-    @echo "  v12-static (glibc): $(stat -c%s v12-static/nano_ssh_server 2>/dev/null || echo '?') bytes (~718 KB)"
-    @echo ""
-    @echo "Musl is 13.5x smaller than glibc! 🎉"
-    @echo ""
+    @echo "Built v21-static: $(stat -c%s v21-static/nano_ssh_server 2>/dev/null || echo '?') bytes"
 
 # Run v21-static
 run-v21-static:
@@ -372,7 +305,7 @@ clean-bash:
 help:
     @echo "Nano SSH Server - Task Automation"
     @echo ""
-    @echo "⭐ Recommended: v21-static (53 KB musl static)"
+    @echo "Recommended: v21-static (53 KB musl static)"
     @echo "  just build-v21-static     # Build v21-static with musl"
     @echo "  just run-v21-static       # Run v21-static server"
     @echo "  just test-v21-static      # Test v21-static with SSH client"
@@ -383,10 +316,6 @@ help:
     @echo "  just connect              # Connect with SSH client"
     @echo "  just test v20-opt         # Run tests"
     @echo "  just size-report          # Compare binary sizes"
-    @echo ""
-    @echo "Musl vs glibc comparison:"
-    @echo "  just build-v21-static     # 53 KB - musl static ⭐"
-    @echo "  just build-v14-static     # 718 KB - glibc static (bloated!)"
     @echo ""
     @echo "BASH SSH Server:"
     @echo "  just run-bash             # Run BASH implementation (complete)"

@@ -12,6 +12,11 @@ pkgs.mkShell {
     gcc
     gnumake
     pkg-config
+    # musl-gcc is exposed via shellHook PATH below, NOT as a (native)BuildInput.
+    # Adding `musl`/`musl.dev` to either input list propagates musl's lib/ onto
+    # NIX_LDFLAGS (-L .../musl/lib), so plain gcc links the non-musl versions
+    # against musl's libc.so and they segfault before main(). Verified that
+    # nativeBuildInputs leaks too; only the PATH export keeps gcc's link path clean.
 
     # Task automation
     just
@@ -41,6 +46,9 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
+    # Expose musl-gcc without adding musl libc.so to gcc's default link path
+    export PATH="${pkgs.musl.dev}/bin:$PATH"
+
     echo "======================================"
     echo "Nano SSH Server Development Environment"
     echo "======================================"

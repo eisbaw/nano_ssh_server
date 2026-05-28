@@ -14,13 +14,14 @@ PORT=2222
 PASSWORD="password123"
 USER="user"
 
-# Working versions only (failing versions removed)
+# Production versions validated end-to-end with a real SSH client.
 VERSIONS=(
-    "v0-vanilla:Baseline"
-    "v12-static:Fully static"
-    "v17-from14:Custom crypto"
-    "v19-donna:Donna implementation"
-    "v20-opt:Latest optimized"
+    "v0-vanilla:Baseline reference"
+    "v17-from14:Custom crypto, dynamic"
+    "v17-static2:Custom crypto, musl static"
+    "v19-donna:Curve25519-donna"
+    "v20-opt:Optimized dynamic"
+    "v21-static:Recommended musl static"
 )
 
 # Stats
@@ -40,7 +41,7 @@ test_version() {
     local ver_info="$1"
     local version=$(echo "$ver_info" | cut -d: -f1)
     local description=$(echo "$ver_info" | cut -d: -f2-)
-    local binary="/home/user/nano_ssh_server/$version/nano_ssh_server"
+    local binary="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/$version/nano_ssh_server"
 
     ((TOTAL++))
 
@@ -58,7 +59,7 @@ test_version() {
     sleep 0.5
 
     # Start server (don't redirect output - some servers need it)
-    cd "/home/user/nano_ssh_server/$version"
+    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)/$version"
     ./nano_ssh_server > /tmp/ssh_server_$version.log 2>&1 &
     local pid=$!
 
@@ -66,7 +67,9 @@ test_version() {
     sleep 5
 
     # Test SSH connection (enable RSA for older versions)
+    # -F none: bypass system ssh_config (NixOS uses options unknown to vanilla openssh)
     local result=$(sshpass -p "$PASSWORD" ssh \
+        -F none \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
         -o PubkeyAcceptedKeyTypes=+ssh-rsa \
@@ -93,7 +96,7 @@ test_version() {
         fi
     fi
 
-    cd /home/user/nano_ssh_server
+    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 }
 
 # Run tests
