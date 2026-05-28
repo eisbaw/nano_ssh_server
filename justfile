@@ -14,12 +14,15 @@ build VERSION:
 # Build all versions
 build-all:
     @echo "Building all versions..."
-    @for dir in v*-*/; do \
-        if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
-            echo "Building $$dir..."; \
-            cd "$$dir" && make && cd ..; \
-        fi \
-    done
+    @failed=""; \
+    for dir in v*-*/; do \
+        if [ -f "$dir/Makefile" ]; then \
+            echo "Building $dir..."; \
+            ( cd "$dir" && make ) || failed="$failed $dir"; \
+        fi; \
+    done; \
+    if [ -n "$failed" ]; then echo "Build failed for:$failed"; exit 1; fi; \
+    echo "All versions built."
 
 # Clean specific version
 clean VERSION:
@@ -31,10 +34,10 @@ clean VERSION:
 clean-all:
     @echo "Cleaning all versions..."
     @for dir in v*-*/; do \
-        if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
-            echo "Cleaning $$dir..."; \
-            cd "$$dir" && make clean && cd ..; \
-        fi \
+        if [ -f "$dir/Makefile" ]; then \
+            echo "Cleaning $dir..."; \
+            ( cd "$dir" && make clean ) || true; \
+        fi; \
     done
 
 # Run specific version (starts SSH server on port 2222)
