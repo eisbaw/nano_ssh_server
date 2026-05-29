@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **14 KB** (`v23-min`, fully static, zero runtime
-dependencies) or 20 KB (`v23-scratch`, dynamic).
+The smallest working build is **14,576 bytes** (`v25-pack`, fully static, zero
+runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v23-min              # recommended: 14 KB, fully static, no libc
-just run v23-min                # listens on 2222
+just build v25-pack             # recommended/smallest: 14.6 KB, fully static
+just run v25-pack               # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +26,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version     | Bytes   | Size   | Linkage                | Notes                                |
 |-------------|---------|--------|------------------------|--------------------------------------|
-| v23-min     |  14,800 |  14 KB | static, no libc        | Recommended/smallest: from-scratch main + freestanding syscalls |
+| v25-pack    |  14,576 |  14 KB | static, no libc        | Recommended/smallest: v23-min + computed AES S-box + packed exchange hash |
+| v23-min     |  14,800 |  14 KB | static, no libc        | from-scratch main + freestanding syscalls |
 | v23-scratch |  20,688 |  20 KB | dynamic, glibc         | Smallest dynamic: from-scratch 378-line main |
 | v22-c25519  |  25,272 |  25 KB | dynamic, glibc         | c25519 ladder, libc only             |
 | v17-from14  |  25,248 |  24 KB | dynamic, glibc+libsodium | Smaller on disk, but needs libsodium at runtime |
@@ -82,6 +83,11 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   (`-nostdlib -ffreestanding`, direct syscalls) for the smallest static build
 - `-Wl,-z,noseparate-code` to remove segment-alignment padding (~4 KB on small binaries)
 - A tight from-scratch `main` (no debug, no malloc, fixed buffers)
+- Code-size packing: compute the AES S-box in GF(2^8) instead of a 256-byte
+  lookup table (trades table for ~70 bytes of code), and factor repeated
+  exchange-hash field hashing into one helper (`v25-pack`). Note the computed
+  S-box is not constant-time (data-dependent); a non-issue for this educational
+  server but do not carry the pattern into production crypto.
 
 ## Testing
 
@@ -109,7 +115,8 @@ nano_ssh_server/
 ├── v22-c25519/        c25519 ladder, dynamic, libc-only
 ├── v22-static/        c25519 ladder, musl static
 ├── v23-scratch/       smallest dynamic: from-scratch 378-line main
-├── v23-min/           recommended/smallest: scratch main + freestanding, no libc
+├── v23-min/           scratch main + freestanding, no libc
+├── v25-pack/          recommended/smallest: v23-min + computed S-box + packed hash
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -123,9 +130,10 @@ nano_ssh_server/
 
 ## Status
 
-Ten production versions are validated end-to-end against a real OpenSSH client
+Eleven production versions are validated end-to-end against a real OpenSSH client
 on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`, `v19-donna`,
-`v20-opt`, `v21-static`, `v22-c25519`, `v22-static`, `v23-scratch`, `v23-min`.
+`v20-opt`, `v21-static`, `v22-c25519`, `v22-static`, `v23-scratch`, `v23-min`,
+`v25-pack`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
