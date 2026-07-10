@@ -21,6 +21,9 @@ pkgs.mkShell {
     # Task automation
     just
 
+    # v26-genk build step (sstrip.py section-header stripper)
+    python3
+
     # SSH client for testing
     openssh
 

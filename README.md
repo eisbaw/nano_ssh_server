@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **14,576 bytes** (`v25-pack`, fully static, zero
+The smallest working build is **12,074 bytes** (`v26-genk`, fully static, zero
 runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v25-pack             # recommended/smallest: 14.6 KB, fully static
-just run v25-pack               # listens on 2222
+just build v26-genk             # recommended/smallest: 12 KB, fully static
+just run v26-genk               # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +26,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version     | Bytes   | Size   | Linkage                | Notes                                |
 |-------------|---------|--------|------------------------|--------------------------------------|
-| v25-pack    |  14,576 |  14 KB | static, no libc        | Recommended/smallest: v23-min + computed AES S-box + packed exchange hash |
+| v26-genk    |  12,074 |  12 KB | static, no libc        | Recommended/smallest: v25-pack + generated SHA/Ed25519 constants + ELF golf |
+| v25-pack    |  14,576 |  14 KB | static, no libc        | v23-min + computed AES S-box + packed exchange hash |
 | v23-min     |  14,800 |  14 KB | static, no libc        | from-scratch main + freestanding syscalls |
 | v23-scratch |  20,688 |  20 KB | dynamic, glibc         | Smallest dynamic: from-scratch 378-line main |
 | v22-c25519  |  25,272 |  25 KB | dynamic, glibc         | c25519 ladder, libc only             |
@@ -37,6 +38,12 @@ smallest first. Run `just size-report` to regenerate.
 | v21-static  |  54,344 |  53 KB | static, musl           | Curve25519-donna, zero runtime deps  |
 | v17-static2 |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
 | v0-vanilla  | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
+
+Exact byte counts vary a little with the toolchain. `v26-genk`'s 12,074 was
+measured with musl-gcc (gcc 13.3, musl 1.2.4, binutils 2.42); `v25-pack`
+rebuilt with the same toolchain is 13,928 bytes, so the like-for-like saving is
+1,854 bytes (−13%). See `v26-genk/optimization_log.txt` for the step-by-step
+breakdown.
 
 The two smallest builds share one from-scratch `main` (378 lines, single
 hardcoded algorithm path, no debug output, fixed-size buffers, no malloc):
@@ -88,6 +95,17 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   exchange-hash field hashing into one helper (`v25-pack`). Note the computed
   S-box is not constant-time (data-dependent); a non-issue for this educational
   server but do not carry the pattern into production crypto.
+- Generated constants (`v26-genk`): the SHA-512 K table and initial state are
+  computed at startup from integer cube/square roots of the first 80 primes
+  (their FIPS 180-4 definition), and the SHA-256 K table and initial state are
+  read off as the top 32 bits of the same values — ~1 KB of constant tables
+  becomes ~460 bytes of generator code. The Ed25519 base/neutral points are
+  likewise built at startup (only the base x coordinate remains stored).
+- ELF golf (`v26-genk`): `-Oz`, compile+link in one gcc invocation so `-Oz`
+  reaches the LTO codegen, `-fcf-protection=none`, `-Wl,-n`, a minimal linker
+  script (single RWX `PT_LOAD` covering headers + packed sections), and
+  `sstrip.py` to drop the section header table. Metadata removal only — the
+  loaded image is unchanged, unlike UPX-style compression which is banned.
 
 ## Testing
 
@@ -116,7 +134,8 @@ nano_ssh_server/
 ├── v22-static/        c25519 ladder, musl static
 ├── v23-scratch/       smallest dynamic: from-scratch 378-line main
 ├── v23-min/           scratch main + freestanding, no libc
-├── v25-pack/          recommended/smallest: v23-min + computed S-box + packed hash
+├── v25-pack/          v23-min + computed S-box + packed hash
+├── v26-genk/          recommended/smallest: v25-pack + generated constants + ELF golf
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -130,10 +149,10 @@ nano_ssh_server/
 
 ## Status
 
-Eleven production versions are validated end-to-end against a real OpenSSH client
+Twelve production versions are validated end-to-end against a real OpenSSH client
 on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`, `v19-donna`,
 `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`, `v23-scratch`, `v23-min`,
-`v25-pack`.
+`v25-pack`, `v26-genk`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
