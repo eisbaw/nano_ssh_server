@@ -1,0 +1,51 @@
+v26-genk optimization log
+=========================
+Baseline: v25-pack sources, rebuilt in the same environment for a fair
+comparison (musl-gcc wrapping gcc 13.3, musl 1.2.4, binutils 2.42,
+Ubuntu 24.04 x86-64): 13,928 bytes.
+(The README's historical 14,576 for v25-pack came from the pinned-nix
+toolchain; all numbers below are same-toolchain deltas.)
+
+Step                                                    Size (B)   Delta
+------------------------------------------------------  --------  ------
+v25-pack baseline (rebuilt)                               13,928       -
+1. SHA-512 K table + initial state generated at startup
+   (integer cube/square roots of first 80 primes);
+   SHA-256 K + init = top 32 bits of the same values,
+   replacing 640+64+256(+32 code) B of constants with
+   ~460 B of generator code                               13,448    -480
+2. Ed25519 base/neutral points built at startup:
+   neutral = (0,1,0,1) from zeroed bss, base.y is
+   0x58 + 31x0x66 via memset, base.z = 1, base.t = x*y
+   via the already-linked field multiply; only base.x
+   (32 B) remains as stored data                          13,288    -160
+3. -Oz instead of -Os, and compile+link in ONE gcc
+   invocation so -Oz also reaches the LTO codegen at
+   link time                                              12,912    -376
+4. -Wl,-n (nmagic: no page-alignment padding)             12,880     -32
+5. -fcf-protection=none (drops .note.gnu.property and
+   its NOTE/GNU_PROPERTY program headers)                 12,800     -80
+6. tiny.ld linker script: single RWX PT_LOAD covering
+   ELF header + phdrs + packed sections; no GNU_STACK     12,536    -264
+7. KEXINIT name-lists as one packed NUL-separated
+   string instead of a 10-pointer array (80 B data)       12,424    -112
+8. sstrip.py: drop the section header table + shstrtab
+   (ELF metadata only; the loaded image is identical -
+   this is NOT executable compression)                    12,074    -350
+------------------------------------------------------  --------  ------
+Total                                                     12,074  -1,854
+
+All steps verified after each change with the real OpenSSH client:
+  sshpass -p password123 ssh -p 2222 user@localhost  ->  "Hello World"
+Full suite: tests/run_tests.sh v26-genk -> 3/3 PASSED (version banner,
+connection, wrong-password rejected + correct password accepted).
+Three sequential connections against one server process all succeed
+(the startup-generated tables are write-once, read-only afterwards).
+
+Rejected/no-effect experiments:
+- -fno-jump-tables: no change
+- -finline-functions with -Oz: no change
+- -Wl,-z,max-page-size=4096: no change (tiny.ld supersedes)
+- -Wl,--icf=all: not supported by BFD ld
+- UPX/compression: forbidden by project rules (and pointless for the
+  in-RAM footprint this project actually targets)
