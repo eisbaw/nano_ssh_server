@@ -26,7 +26,8 @@ VERSIONS=(
     "v22-static:c25519 ladder, musl static"
     "v23-scratch:Smallest dynamic: from-scratch 378-line main"
     "v23-min:scratch main + nolibc freestanding, fully static"
-    "v25-pack:Smallest overall: v23-min + computed AES S-box + packed hash"
+    "v25-pack:v23-min + computed AES S-box + packed hash"
+    "v26-genk:Smallest overall: v25-pack + generated constants + ELF golf"
 )
 
 # Stats
