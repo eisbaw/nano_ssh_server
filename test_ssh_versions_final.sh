@@ -27,7 +27,8 @@ VERSIONS=(
     "v23-scratch:Smallest dynamic: from-scratch 378-line main"
     "v23-min:scratch main + nolibc freestanding, fully static"
     "v25-pack:v23-min + computed AES S-box + packed hash"
-    "v26-genk:Smallest overall: v25-pack + generated constants + ELF golf"
+    "v26-genk:v25-pack + generated constants + ELF golf"
+    "v27-onecurve:Smallest overall: one Curve25519 implementation for KEX and signing"
 )
 
 # Stats
