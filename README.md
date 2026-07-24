@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **12,074 bytes** (`v26-genk`, fully static, zero
-runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
+The smallest working build is **9,946 bytes** (`v27-onecurve`, fully static,
+zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v26-genk             # recommended/smallest: 12 KB, fully static
-just run v26-genk               # listens on 2222
+just build v27-onecurve         # recommended/smallest: 9.7 KB, fully static
+just run v27-onecurve           # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -24,29 +24,43 @@ The repository keeps each optimization step as its own directory so the size
 progression is reproducible. The table lists the production-ready builds, sorted
 smallest first. Run `just size-report` to regenerate.
 
-| Version     | Bytes   | Size   | Linkage                | Notes                                |
-|-------------|---------|--------|------------------------|--------------------------------------|
-| v26-genk    |  12,074 |  12 KB | static, no libc        | Recommended/smallest: v25-pack + generated SHA/Ed25519 constants + ELF golf |
-| v25-pack    |  14,576 |  14 KB | static, no libc        | v23-min + computed AES S-box + packed exchange hash |
-| v23-min     |  14,800 |  14 KB | static, no libc        | from-scratch main + freestanding syscalls |
-| v23-scratch |  20,688 |  20 KB | dynamic, glibc         | Smallest dynamic: from-scratch 378-line main |
-| v22-c25519  |  25,272 |  25 KB | dynamic, glibc         | c25519 ladder, libc only             |
-| v17-from14  |  25,248 |  24 KB | dynamic, glibc+libsodium | Smaller on disk, but needs libsodium at runtime |
-| v20-opt     |  41,288 |  40 KB | dynamic, glibc         | Compiler + linker optimizations      |
-| v19-donna   |  45,720 |  44 KB | dynamic, glibc         | Curve25519-donna implementation      |
-| v22-static  |  51,008 |  50 KB | static, musl           | c25519 ladder, zero runtime deps     |
-| v21-static  |  54,344 |  53 KB | static, musl           | Curve25519-donna, zero runtime deps  |
-| v17-static2 |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
-| v0-vanilla  | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
+| Version      | Bytes   | Size   | Linkage                | Notes                                |
+|--------------|---------|--------|------------------------|--------------------------------------|
+| v27-onecurve |   9,946 | 9.7 KB | static, no libc        | Recommended/smallest: one Curve25519 implementation for KEX and signing |
+| v26-genk     |  12,074 |  12 KB | static, no libc        | v25-pack + generated SHA/Ed25519 constants + ELF golf |
+| v25-pack     |  14,576 |  14 KB | static, no libc        | v23-min + computed AES S-box + packed exchange hash |
+| v23-min      |  14,800 |  14 KB | static, no libc        | from-scratch main + freestanding syscalls |
+| v23-scratch  |  20,688 |  20 KB | dynamic, glibc         | Smallest dynamic: from-scratch 378-line main |
+| v22-c25519   |  25,272 |  25 KB | dynamic, glibc         | c25519 ladder, libc only             |
+| v17-from14   |  25,248 |  24 KB | dynamic, glibc+libsodium | Smaller on disk, but needs libsodium at runtime |
+| v20-opt      |  41,288 |  40 KB | dynamic, glibc         | Compiler + linker optimizations      |
+| v19-donna    |  45,720 |  44 KB | dynamic, glibc         | Curve25519-donna implementation      |
+| v22-static   |  51,008 |  50 KB | static, musl           | c25519 ladder, zero runtime deps     |
+| v21-static   |  54,344 |  53 KB | static, musl           | Curve25519-donna, zero runtime deps  |
+| v17-static2  |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
+| v0-vanilla   | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
 
-Exact byte counts vary a little with the toolchain. `v26-genk`'s 12,074 was
-measured with musl-gcc (gcc 13.3, musl 1.2.4, binutils 2.42); `v25-pack`
-rebuilt with the same toolchain is 13,928 bytes, so the like-for-like saving is
-1,854 bytes (−13%). See `v26-genk/optimization_log.txt` for the step-by-step
-breakdown.
+Exact byte counts vary a little with the toolchain. `v27-onecurve`'s 9,946 and
+`v26-genk`'s 12,074 were measured with the same gcc 13.3 / binutils 2.42, so
+the like-for-like saving is 2,128 bytes (−17.6%). (The freestanding builds are
+`-nostdlib`, so musl-gcc and plain gcc emit identical bytes.) `v25-pack`
+rebuilt with that toolchain is 13,928 bytes. See each version's
+`optimization_log.txt` for the step-by-step breakdown.
 
-The two smallest builds share one from-scratch `main` (378 lines, single
-hardcoded algorithm path, no debug output, fixed-size buffers, no malloc):
+`v27-onecurve` starts from the observation that `v26-genk` carried two full
+Curve25519 implementations: the c25519 Montgomery ladder for the key exchange
+and the twisted-Edwards group law for the host-key signature. They are the
+same group in different coordinates, so the ladder is redundant — map the
+peer's `u` coordinate onto the Edwards curve, reuse the scalar multiplier, and
+map back. Once that mapping exists a square root is linked anyway, which lets
+the field inverse and the square root share one exponentiation chain, and the
+same "there is only one of these" argument then removes the dedicated doubling
+formula (the addition law is complete on this curve), the SHA-512 key
+expansion (a random scalar is indistinguishable to a verifier), and the
+streaming SHA-512 path (one 96-byte input remains).
+
+The smallest builds share one from-scratch `main` (single hardcoded algorithm
+path, no debug output, fixed-size buffers, no malloc):
 - `v23-scratch` links glibc dynamically (20 KB).
 - `v23-min` drops libc entirely — direct x86-64 Linux syscalls, a custom
   `_start`, and hand-rolled mem/str routines (`nolibc.h`/`nolibc.c`) — and links
@@ -95,6 +109,12 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   exchange-hash field hashing into one helper (`v25-pack`). Note the computed
   S-box is not constant-time (data-dependent); a non-issue for this educational
   server but do not carry the pattern into production crypto.
+- One curve implementation (`v27-onecurve`): X25519 runs on the Edwards group
+  law linked for Ed25519, so the Montgomery ladder disappears; the field
+  inverse is `exp2523(x)^8 · x^3` so one exponentiation chain serves both the
+  inverse and the square root; doubling uses the (complete) addition law, and
+  the addition law itself is an 18-instruction program over a flat file of
+  field elements at 3 bytes per operation instead of 18 straight-line calls
 - Generated constants (`v26-genk`): the SHA-512 K table and initial state are
   computed at startup from integer cube/square roots of the first 80 primes
   (their FIPS 180-4 definition), and the SHA-256 K table and initial state are
@@ -149,10 +169,10 @@ nano_ssh_server/
 
 ## Status
 
-Twelve production versions are validated end-to-end against a real OpenSSH client
-on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`, `v19-donna`,
-`v20-opt`, `v21-static`, `v22-c25519`, `v22-static`, `v23-scratch`, `v23-min`,
-`v25-pack`, `v26-genk`.
+Thirteen production versions are validated end-to-end against a real OpenSSH
+client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
+`v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
+`v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -175,6 +195,11 @@ concept.
 
 This is an educational project. The server uses hardcoded credentials, runs
 single-threaded, has no DoS protection, and is not hardened. Do not deploy.
+Two size optimizations also weaken the crypto in ways that matter only if you
+ignore that advice: the AES S-box is computed with data-dependent operations
+(`v25-pack`), and `v27-onecurve` accepts an X25519 peer point without checking
+that it is on the curve — a twist point yields a wrong shared secret and the
+handshake fails at the first MAC check, rather than being rejected outright.
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.
 
