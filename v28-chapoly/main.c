@@ -1,0 +1,419 @@
+/* Nano SSH Server - v28-chapoly: v27-onecurve with the packet cipher
+ * changed from aes128-ctr + hmac-sha2-256 to chacha20-poly1305@openssh.com
+ * (see chapoly.h). Single algorithm path: curve25519-sha256 / ssh-ed25519 /
+ * chacha20-poly1305@openssh.com. No debug output, no malloc, no libc. Fully
+ * static/self-contained. See optimization_log.txt for the size steps. */
+
+#include <stdint.h>
+#include "nolibc.h"            /* mem/str, raw syscalls, sockets, htons */
+#include "random_minimal.h"     /* randombytes_buf() via getrandom(2) */
+#include "edsign.h"              /* Ed25519 host key + signature */
+#include "x25519_ed.h"           /* X25519 on the same Edwards code */
+#include "ed25519.h"             /* ed25519_gen() startup constant setup */
+#include "chapoly.h"
+#include "sha256_minimal.h"
+
+#define PORT 2222
+#define V_S  "SSH-2.0-NanoSSH"
+
+#define MSG_DISCONNECT 1
+#define MSG_SERVICE_REQUEST 5
+#define MSG_SERVICE_ACCEPT 6
+#define MSG_KEXINIT 20
+#define MSG_NEWKEYS 21
+#define MSG_KEX_ECDH_INIT 30
+#define MSG_KEX_ECDH_REPLY 31
+#define MSG_USERAUTH_REQUEST 50
+#define MSG_USERAUTH_SUCCESS 52
+#define MSG_CHANNEL_OPEN 90
+#define MSG_CHANNEL_OPEN_CONFIRMATION 91
+#define MSG_CHANNEL_DATA 94
+#define MSG_CHANNEL_EOF 96
+#define MSG_CHANNEL_CLOSE 97
+#define MSG_CHANNEL_REQUEST 98
+#define MSG_CHANNEL_SUCCESS 99
+
+/* Big-endian 32-bit wire fields: one bswap + one unaligned access (u32a). */
+#define PUT32(b,v) (*(u32a *)(b) = __builtin_bswap32(v))
+#define GET32(b) __builtin_bswap32(*(const u32a *)(b))
+
+/* One direction of the connection. key = K_2 (payload) || K_1 (length) as
+ * derived per RFC 4253 7.2; seq is the packet sequence number and doubles as
+ * the "keys in use" flag: it stays 0 until NEWKEYS and is set to 3 there
+ * (three packets precede it in each direction), so it is never 0 afterwards. */
+typedef struct {
+    uint8_t key[64];
+    uint32_t seq;
+} cstate_t;
+
+static cstate_t cs[2];          /* [0] client->server, [1] server->client */
+#define c2s cs[0]
+#define s2c cs[1]
+
+/* Ed25519 host key, generated once at startup (bss, so it costs no file bytes) */
+static uint8_t host_pub[EDSIGN_PUBLIC_KEY_SIZE];
+static uint8_t host_sec[EDSIGN_SECRET_KEY_SIZE];
+
+/* ---- I/O ----
+ * The connection's socket. One connection at a time, so it is a global
+ * rather than an argument threaded through every packet function (which
+ * cost a register or a stack reload at each of the ~25 call sites).
+ * read(2) and write(2) differ only in the syscall number, so one loop with
+ * the number as a parameter serves both directions. */
+static int cfd;
+
+static int xio(void *b, size_t n, long sysno) {
+    uint8_t *p = b; size_t s = 0;
+    while (s < n) {
+        long r = __syscall3(sysno, cfd, p + s, n - s);
+        if (r <= 0) return -1;
+        s += (size_t)r;
+    }
+    return 0;
+}
+#define xsend(b, n) xio((void *)(b), (n), SYS_write)
+#define xrecv(b, n) xio((b), (n), SYS_read)
+
+/* ---- SSH string helper ---- */
+static size_t put_str(uint8_t *b, const void *s, size_t n) {
+    PUT32(b, (uint32_t)n); memcpy(b + 4, s, n); return 4 + n;
+}
+
+/* Does an SSH string field equal this literal? Compared in place, with the
+ * literal's length known at compile time (strlen() is a real call in a
+ * freestanding build). */
+#define fld_is(d, n, s) ((n) == sizeof(s) - 1 && !memcmp((d), (s), (n)))
+
+/* Bounds-checked read of an SSH length-prefixed field within [*pp, end).
+ * Advances *pp past the field; returns a pointer to its data, or NULL on
+ * overrun. *len receives the field length. */
+static uint8_t *rd_field(uint8_t **pp, uint8_t *end, uint32_t *len) {
+    if (end - *pp < 4) return 0;
+    uint32_t l = GET32(*pp); *pp += 4;
+    if ((uint32_t)(end - *pp) < l) return 0;
+    uint8_t *d = *pp; *pp += l; *len = l;
+    return d;
+}
+
+/* ---- chacha20-poly1305@openssh.com on one packet ----
+ * Poly1305 one-time key = ChaCha20(K_2, seq, counter 0)[0..31]; the tag covers
+ * the encrypted length and the encrypted payload. */
+static void aead_tag(const cstate_t *c, const uint8_t *pkt, size_t pktlen,
+                     uint8_t *tag) {
+    uint8_t pk[32];
+    memset(pk, 0, 32);
+    chacha_xor(c->key, c->seq, 0, pk, 32);
+    poly1305(tag, pk, pkt, 4 + pktlen);
+}
+
+/* Encrypt (dec = 0) or decrypt (dec = 1) pkt = length || payload in place
+ * and produce the tag. Sending encrypts and then tags; receiving tags the
+ * ciphertext and then decrypts - the length word is XORed first in both
+ * cases, which on receive re-encrypts the copy recv_packet() decrypted to
+ * learn how much to read, so the tag sees the bytes that were on the wire. */
+static void aead(cstate_t *c, uint8_t *pkt, size_t pktlen, uint8_t *tag,
+                 int dec) {
+    chacha_xor(c->key + 32, c->seq, 0, pkt, 4);
+    if (dec) aead_tag(c, pkt, pktlen, tag);
+    chacha_xor(c->key, c->seq, 1, pkt + 4, pktlen);
+    if (!dec) aead_tag(c, pkt, pktlen, tag);
+    c->seq++;
+}
+
+/* ---- send one binary packet (encrypted once s2c.seq is set) ---- */
+static int send_packet(const uint8_t *payload, size_t plen) {
+    uint8_t pkt[4096 + 16];
+    /* Padding is over packet_length||padding_length||payload before
+     * NEWKEYS; the AEAD leaves the length word out (OpenSSH aadlen = 4).
+     * Block size is 8 either way. */
+    size_t total = (s2c.seq ? 1 : 5) + plen;
+    uint8_t pad = 8 - (total % 8);
+    if (pad < 4) pad += 8;
+    uint32_t pktlen = 1 + plen + pad;
+    PUT32(pkt, pktlen);
+    pkt[4] = pad;
+    memcpy(pkt + 5, payload, plen);
+    randombytes_buf(pkt + 5 + plen, pad);
+    total = 4 + pktlen;
+    if (s2c.seq) {
+        aead(&s2c, pkt, pktlen, pkt + total, 0);
+        total += 16;
+    }
+    return xsend(pkt, total);
+}
+
+/* Send [type][recipient channel][body]: the shape of every channel-level
+ * message this server emits (open confirmation, success, data, eof, close). */
+static int send_chan(uint8_t type, uint32_t chan, const void *body,
+                     size_t n) {
+    uint8_t b[32];
+    b[0] = type;
+    PUT32(b + 1, chan);
+    memcpy(b + 5, body, n);
+    return send_packet(b, 5 + n);
+}
+
+/* ---- recv one binary packet into buf (max bytes) ----
+ * The packet is read in place - length, padding length, payload, padding,
+ * tag - and the payload length is returned; the payload itself starts at
+ * buf + 5, which callers address through a second pointer, so there is no
+ * copy out of a private buffer. Returns -1 on any error. */
+static ssize_t recv_packet(uint8_t *buf, size_t max) {
+    uint8_t mac[16];
+    uint32_t pktlen;
+    size_t pad;
+    if (xrecv(buf, 4)) return -1;
+    if (c2s.seq) chacha_xor(c2s.key + 32, c2s.seq, 0, buf, 4);
+    pktlen = GET32(buf);
+    if (pktlen < 5 || pktlen + 4 + 16 > max) return -1;
+    if (xrecv(buf + 4, pktlen + (c2s.seq ? 16 : 0))) return -1;
+    if (c2s.seq) {
+        aead(&c2s, buf, pktlen, mac, 1);
+        if (ct_diff(mac, buf + 4 + pktlen, 16)) return -1;
+    }
+    pad = buf[4];
+    if (pad >= pktlen - 1) return -1;
+    return (ssize_t)(pktlen - 1 - pad);
+}
+
+/* ---- KEXINIT payload ---- */
+static size_t build_kexinit(uint8_t *p) {
+    /* KEXINIT carries ten name-lists: kex, hostkey, enc c2s/s2c, mac
+     * c2s/s2c, comp c2s/s2c, lang c2s/s2c. Six of them repeat, so the five
+     * distinct names are stored once and indexed; the two language lists
+     * are empty and point at a trailing NUL. */
+    static const char nl[] =
+        "curve25519-sha256\0" "ssh-ed25519\0" "chacha20-poly1305@openssh.com\0"
+        "none";
+    /* The AEAD cipher carries its own MAC, so the client never looks at the
+     * mac lists (OpenSSH skips choose_mac() for authenticated ciphers) and
+     * they are sent empty, like the language lists. */
+    static const uint8_t off[10] = { 0, 18, 30, 30, 64, 64, 60, 60, 64, 64 };
+    size_t o = 0;
+    p[o++] = MSG_KEXINIT;
+    randombytes_buf(p + o, 16); o += 16;
+    for (int i = 0; i < 10; i++) {
+        const char *s = nl + off[i];
+        o += put_str(p + o, s, strlen(s));
+    }
+    memset(p + o, 0, 5);   /* first_kex_packet_follows + reserved */
+    return o + 5;
+}
+
+/* ---- mpint (for shared secret K) ---- */
+static size_t put_mpint(uint8_t *b, const uint8_t *d, size_t n) {
+    size_t i = 0;
+    while (i < n && d[i] == 0) i++;
+    if (i < n && (d[i] & 0x80)) {
+        PUT32(b, (uint32_t)(n - i + 1)); b[4] = 0;
+        memcpy(b + 5, d + i, n - i); return 4 + 1 + (n - i);
+    }
+    PUT32(b, (uint32_t)(n - i));
+    memcpy(b + 4, d + i, n - i); return 4 + (n - i);
+}
+
+/* ---- hash an SSH length-prefixed string into a running SHA-256 ---- */
+static void sha_str(sha256_ctx *h, const void *d, uint32_t n) {
+    uint8_t t[4]; PUT32(t, n);
+    sha256_update(h, t, 4);
+    sha256_update(h, (const uint8_t *)d, n);
+}
+
+/* ---- derive one 64-byte key per RFC4253 7.2 ----
+ * K1 = HASH(K || H || id || session_id), K2 = HASH(K || H || K1); the only
+ * keys this cipher needs are the two 64-byte encryption keys, so the length
+ * is fixed and both hashes are always taken. */
+static void derive(uint8_t *out, const uint8_t *K, const uint8_t *H, char id) {
+    uint8_t mp[64]; size_t mlen = put_mpint(mp, K, 32);
+    sha256_ctx h;
+    for (int j = 0; j < 2; j++) {
+        sha256_init(&h);
+        sha256_update(&h, mp, mlen);
+        sha256_update(&h, H, 32);
+        if (j) {
+            sha256_update(&h, out, 32);
+        } else {
+            sha256_update(&h, (uint8_t *)&id, 1);
+            sha256_update(&h, H, 32);   /* session id == H: never rekeys */
+        }
+        sha256_final(&h, out + 32 * j);
+    }
+}
+
+static void handle(void) {
+    char cver[256];
+    /* version exchange */
+    if (xsend(V_S "\r\n", sizeof(V_S) + 1)) return;
+    int i;
+    for (i = 0; i < (int)sizeof(cver) - 1; i++) {
+        if (xrecv(cver + i, 1)) return;
+        if (cver[i] == '\n') break;
+    }
+    /* V_C for the exchange hash is the line without its CR LF; we stopped
+     * on the LF, so at most one CR precedes it. */
+    int vl = i;
+    if (vl > 0 && cver[vl - 1] == '\r') vl--;
+
+    /* Receive buffers: the payload of a received packet sits 5 bytes in */
+    uint8_t skex[512], ckexbuf[4096 + 16], *ckex = ckexbuf + 5;
+    size_t skexl = build_kexinit(skex);
+    if (send_packet(skex, skexl)) return;
+    ssize_t ckexl = recv_packet(ckexbuf, sizeof(ckexbuf));
+    if (ckexl <= 0 || ckex[0] != MSG_KEXINIT) return;
+
+    /* ECDH */
+    uint8_t epriv[32], epub[32], cpub[32], shared[32], H[32];
+    randombytes_buf(epriv, 32);
+    crypto_scalarmult_base(epub, epriv);
+
+    uint8_t ks[128]; size_t ksl = 0;
+    ksl += put_str(ks, "ssh-ed25519", 11);
+    ksl += put_str(ks + ksl, host_pub, 32);
+
+    uint8_t tmpbuf[512], *tmp = tmpbuf + 5, *kinit = tmp;
+    ssize_t kinitl = recv_packet(tmpbuf, sizeof(tmpbuf));
+    if (kinitl <= 0 || kinit[0] != MSG_KEX_ECDH_INIT) return;
+    if (GET32(kinit + 1) != 32) return;
+    memcpy(cpub, kinit + 5, 32);
+    if (crypto_scalarmult(shared, epriv, cpub)) return;
+
+    /* exchange hash H = SHA256(V_C||V_S||I_C||I_S||K_S||Q_C||Q_S||K) */
+    {
+        sha256_ctx h;
+        sha256_init(&h);
+        sha_str(&h, cver, (uint32_t)vl);
+        sha_str(&h, V_S, sizeof(V_S) - 1);
+        sha_str(&h, ckex, (uint32_t)ckexl);
+        sha_str(&h, skex, (uint32_t)skexl);
+        sha_str(&h, ks, (uint32_t)ksl);
+        sha_str(&h, cpub, 32);
+        sha_str(&h, epub, 32);
+        uint8_t mp[64]; size_t mpl = put_mpint(mp, shared, 32); sha256_update(&h, mp, mpl);
+        sha256_final(&h, H);
+    }
+
+    uint8_t sig[EDSIGN_SIGNATURE_SIZE];
+    edsign_sign(sig, host_pub, host_sec, H);
+
+    /* KEX_ECDH_REPLY */
+    uint8_t rep[512]; size_t rl = 0;
+    rep[rl++] = MSG_KEX_ECDH_REPLY;
+    rl += put_str(rep + rl, ks, ksl);
+    rl += put_str(rep + rl, epub, 32);
+    /* signature blob, built in place: its length is fixed */
+    PUT32(rep + rl, 4 + 11 + 4 + sizeof(sig)); rl += 4;
+    rl += put_str(rep + rl, "ssh-ed25519", 11);
+    rl += put_str(rep + rl, sig, sizeof(sig));
+    if (send_packet(rep, rl)) return;
+
+    /* Key derivation. RFC 4253 7.2 letters 'C' and 'D' are the client-to-
+     * server and server-to-client encryption keys; the AEAD needs no IVs
+     * (the nonce is the sequence number) and no integrity keys, so the two
+     * 64-byte keys go straight into the direction states. */
+    for (int i = 0; i < 2; i++)
+        derive(cs[i].key, shared, H, (char)('C' + i));
+
+    /* NEWKEYS: after it, each direction's sequence number (3 so far) also
+     * marks its keys as in use */
+    uint8_t nk = MSG_NEWKEYS;
+    if (send_packet(&nk, 1)) return;
+    s2c.seq = 3;
+
+    if (recv_packet(tmpbuf, sizeof(tmpbuf)) <= 0 || tmp[0] != MSG_NEWKEYS) return;
+    c2s.seq = 3;
+
+    /* SERVICE_REQUEST -> ACCEPT */
+    if (recv_packet(tmpbuf, sizeof(tmpbuf)) <= 0 || tmp[0] != MSG_SERVICE_REQUEST) return;
+    uint8_t sa[64]; size_t sal = 0;
+    sa[sal++] = MSG_SERVICE_ACCEPT;
+    sal += put_str(sa + sal, "ssh-userauth", 12);
+    if (send_packet(sa, sal)) return;
+
+    /* USERAUTH. Exactly one request is acceptable - user "user", service
+     * "ssh-connection", method "password", no change flag, password
+     * "password123" - and it is a fixed 55-byte message, so it is matched
+     * whole instead of being parsed field by field. */
+    static const uint8_t want[] =
+        "\x32" "\0\0\0\x04" "user" "\0\0\0\x0e" "ssh-connection"
+        "\0\0\0\x08" "password" "\0" "\0\0\0\x0b" "password123";
+    for (;;) {
+        ssize_t n = recv_packet(tmpbuf, sizeof(tmpbuf));
+        if (n <= 0 || tmp[0] != MSG_USERAUTH_REQUEST) return;
+        if (n == sizeof(want) - 1 && !memcmp(tmp, want, n)) break;
+        uint8_t f[32]; size_t fl = 0;
+        f[fl++] = 51;                                  /* USERAUTH_FAILURE */
+        fl += put_str(f + fl, "password", 8);
+        f[fl++] = 0;
+        if (send_packet(f, fl)) return;
+    }
+    uint8_t ok = MSG_USERAUTH_SUCCESS;
+    if (send_packet(&ok, 1)) return;
+
+    /* CHANNEL_OPEN -> CONFIRMATION */
+    ssize_t con = recv_packet(tmpbuf, sizeof(tmpbuf));
+    if (con <= 0 || tmp[0] != MSG_CHANNEL_OPEN) return;
+    uint8_t *p = tmp + 1, *end = tmp + con;
+    uint32_t ctl;
+    if (!rd_field(&p, end, &ctl)) return;              /* channel type (skipped) */
+    (void)ctl;
+    if (end - p < 4) return;
+    uint32_t cchan = GET32(p);
+    /* server channel 0, window 32768, max packet 16384 */
+    static const uint8_t win[12] = { 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x40, 0 };
+    if (send_chan(MSG_CHANNEL_OPEN_CONFIRMATION, cchan, win, 12)) return;
+
+    /* channel requests until shell/exec */
+    int ready = 0;
+    while (!ready) {
+        ssize_t n = recv_packet(tmpbuf, sizeof(tmpbuf));
+        if (n <= 0) return;
+        if (tmp[0] != MSG_CHANNEL_REQUEST) break;
+        uint8_t *q = tmp + 1, *qend = tmp + n, *rt;
+        uint32_t rtl;
+        if (qend - q < 4) return;
+        q += 4;                                        /* recipient */
+        rt = rd_field(&q, qend, &rtl); if (!rt) return;
+        if (q >= qend) return;
+        uint8_t want = *q;
+        if (fld_is(rt, rtl, "shell") || fld_is(rt, rtl, "exec")) ready = 1;
+        if (want && send_chan(MSG_CHANNEL_SUCCESS, cchan, 0, 0)) return;
+    }
+
+    /* CHANNEL_DATA "Hello World" (the string, length prefix included) */
+    if (ready && send_chan(MSG_CHANNEL_DATA, cchan,
+                           "\0\0\0\x0d" "Hello World\r\n", 17)) return;
+
+    /* EOF + CLOSE */
+    send_chan(MSG_CHANNEL_EOF, cchan, 0, 0);
+    send_chan(MSG_CHANNEL_CLOSE, cchan, 0, 0);
+    recv_packet(tmpbuf, sizeof(tmpbuf));
+}
+
+/* used/externally_visible: nothing in C calls main() - _start reaches it
+ * from inline asm, which LTO cannot see. */
+__attribute__((used, externally_visible))
+int main(void) {
+    sha_gentables();
+    ed25519_gen();
+    edsign_keygen(host_pub, host_sec);
+
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd < 0) return 1;
+    int one = 1;
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    /* INADDR_ANY:PORT as 16 bytes of rodata rather than a memset and stores;
+     * the port is byte-swapped by the preprocessor. */
+    static const struct sockaddr_in a = {
+        AF_INET, (uint16_t)((PORT << 8) | (PORT >> 8)), { INADDR_ANY }, { 0 }
+    };
+    if (bind(lfd, (const struct sockaddr *)&a, sizeof(a)) < 0) return 1;
+    if (listen(lfd, 5) < 0) return 1;
+
+    for (;;) {
+        cfd = accept(lfd, 0, 0);
+        if (cfd < 0) continue;
+        memset(cs, 0, sizeof(cs));
+        handle();
+        close(cfd);
+    }
+}

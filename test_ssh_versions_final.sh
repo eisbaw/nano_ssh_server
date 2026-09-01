@@ -28,7 +28,8 @@ VERSIONS=(
     "v23-min:scratch main + nolibc freestanding, fully static"
     "v25-pack:v23-min + computed AES S-box + packed hash"
     "v26-genk:v25-pack + generated constants + ELF golf"
-    "v27-onecurve:Smallest overall: one Curve25519 implementation for KEX and signing"
+    "v27-onecurve:One Curve25519 implementation for KEX and signing"
+    "v28-chapoly:Smallest overall: chacha20-poly1305 on the Ed25519 field arithmetic"
 )
 
 # Stats
