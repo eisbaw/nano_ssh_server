@@ -257,13 +257,16 @@ static void derive(uint8_t *out, uint8_t *mp, const uint8_t *H, char id) {
     sha256(out + 32, mp, t + 32 - mp);
 }
 
-/* A fresh P-256 scalar in the multiplier's scalar slot, uniform in
- * [0, n): 32 random bytes, redrawn while they are not below n (big-endian,
- * so memcmp() orders them numerically).  An ECDSA nonce must be uniform -
- * any fixed bits leak the key to a lattice attack - and the ladder in
- * p256.c takes care of its leading-bit requirement itself. */
+/* A fresh P-256 scalar in the multiplier's scalar slot: 32 random bytes,
+ * redrawn while they are not below n (big-endian, so memcmp() orders them
+ * numerically) or their top word is zero.  An ECDSA nonce must have no
+ * fixed bits - a lattice attack turns a fixed top bit into the host key -
+ * and this is uniform over [2^224, n), one part in 2^32 short of uniform
+ * over [1, n); the lower bound is what lets the ladder in p256.c use k + n
+ * as its scalar without a second case. */
 static void rand_scalar(void) {
-    do randombytes_buf(P256_K, 32); while (memcmp(P256_K, p256_n, 32) >= 0);
+    do randombytes_buf(P256_K, 32);
+    while (memcmp(P256_K, p256_n, 32) >= 0 || !*(u32a *)P256_K);
 }
 
 static void handle(void) {

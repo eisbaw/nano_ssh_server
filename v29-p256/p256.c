@@ -164,21 +164,19 @@ static void run(const uint8_t *ip)
 }
 
 /*
- * Double-and-add on K = k + n, or k + 2n when that has no bit 256 (k
- * below 2^256 - n, one draw in 2^32): R = P stands for bit 256, then for
- * bits 255..0 of K: R = 2R, R += P if the bit is set (a cmov over the
- * three coordinates).  The addition formula fails only for 2R = O or
- * +-P, i.e. for a prefix m of K with 2m = 0, n-1 or n+1 mod n, and the
- * doubling only for R = O.  With K in [2^256, 2n) the prefixes run
- * through [1, 2^255) at bit 255 and [2^255, n-1) at bit 0 - never a
- * multiple of n and never (n +- 1)/2 - except when k is n-2 or n-1; with
- * K in [2n, 2n + 2^224) the only bad prefix is n itself, reached when k
- * is 0 or 1.  Those four scalars (one draw in 2^254) give a wrong result,
- * which the peer rejects.  Adding n instead of clamping the scalar keeps
- * the scalar itself uniform: the ECDSA nonce has no fixed bits, which a
- * lattice attack would otherwise turn into the host key.
- * K is formed with the modular adder under a zero modulus, which makes it
- * a plain adder wrapping at 2^256; the carry shows as K < k.
+ * Double-and-add on K = k + n, which for k >= 2^224 > 2^256 - n has bit
+ * 256 set: R = P stands for that bit, then for bits 255..0 of K: R = 2R,
+ * R += P if the bit is set (a cmov over the three coordinates).  The
+ * addition formula fails only for 2R = O or +-P, i.e. for a prefix m of K
+ * (bits 256..j+1) with 2m = 0, n-1 or n+1 mod n, and the doubling only
+ * for R = O.  With K in [2^256, 2n) the prefixes at bit 255 lie in
+ * [1, 2^255), at bit 1 in [2^254, 2^255) and at bit 0 in [2^255, n),
+ * so they are never a multiple of n, and the only prefix equal to
+ * (n +- 1)/2 is (n-1)/2 at bit 1 for K in {2n-2, 2n-1} - where bit 1 is
+ * clear, so the failed sum is discarded.  The ladder is exception-free.
+ * Adding n instead of clamping keeps the scalar itself free of fixed bits
+ * (see rand_scalar() in main.c).  K is formed with the modular adder under
+ * a zero modulus, which makes it a plain adder wrapping at 2^256.
  */
 void p256_smult(uint8_t *out, const uint8_t *P)
 {
@@ -188,8 +186,6 @@ void p256_smult(uint8_t *out, const uint8_t *P)
 
 	fp_m = fp_zero;
 	fp_add(k, w[K], p256_n);
-	if (memcmp(k, w[K], FP_SIZE) > 0)	/* no carry: k + 2n */
-		fp_add(k, k, p256_n);
 
 	/* P, R = P are the first four slots: P twice; Z = 1 is zero but
 	 * for its low byte (see p256_affine) */
