@@ -275,6 +275,7 @@ static void handle(void) {
     if (kinitl <= 0 || kinit[0] != MSG_KEX_ECDH_INIT) return;
     if (GET32(kinit + 1) != 32) return;
     memcpy(cpub, kinit + 5, 32);
+    cpub[31] &= 0x7f;   /* RFC 7748 5: the receiver masks bit 255 of u */
     if (crypto_scalarmult(shared, epriv, cpub)) return;
 
     /* exchange hash H = SHA256(V_C||V_S||I_C||I_S||K_S||Q_C||Q_S||K) */

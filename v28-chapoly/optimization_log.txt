@@ -85,9 +85,16 @@ v27-onecurve baseline (rebuilt)                            9,946       -
 13. Literal lengths at compile time: sizeof() for the
     version string, fld_is() as a macro (strlen() is a
     real call in a freestanding build)                      7,943     -96
+14. RFC 7748 5: mask bit 255 of the peer's X25519 u
+    before decoding it (the field code would otherwise
+    fold that bit in as +19).  Neither v27 nor the c25519
+    ladder before it did this; a compliant peer never
+    sets the bit, so it is a conformance fix, not a
+    size step - one and-instruction, 32 bytes on the
+    file at this alignment                                  7,975     +32
 ------------------------------------------------------  --------  ------
-Total                                                      7,943  -2,003
-                                                                  (-20.1%)
+Total                                                      7,975  -1,971
+                                                                  (-19.8%)
 
 Verification after every step with the real OpenSSH client (9.6p1):
   sshpass -p password123 ssh -p 2222 user@localhost  ->  "Hello World"
@@ -138,5 +145,6 @@ Cost of the changes, honestly stated:
   password "password123" over service "ssh-connection"; v27 ignored the
   service name.  Received packets must fit 512 bytes after NEWKEYS (the
   KEXINIT buffer is still 4 KB).
-- Inherited from v27-onecurve: no on-curve check of the peer's X25519 point,
+- Inherited from v27-onecurve: no on-curve check of the peer's X25519 point
+  (bit 255 is masked now, but a twist point is still not rejected),
   randomised (getrandom-based) Ed25519 signing.
