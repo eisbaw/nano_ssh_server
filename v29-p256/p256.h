@@ -19,24 +19,30 @@
 
 #include <stdint.h>
 
-extern const uint8_t p256_p[32];      /* field prime */
-extern const uint8_t p256_n[32];      /* group order */
+extern const uint8_t p256_pn[64];     /* field prime || group order */
+#define p256_p p256_pn
+#define p256_n (p256_pn + 32)
 extern const uint8_t p256_g[64];      /* base point x || y */
 
-/* Scalars are 32 big-endian bytes with bit 255 set and bit 254 clear (see
- * p256.c for why that makes the double-and-add exception-free); the
- * caller draws 32 random bytes and calls p256_clamp() on them. */
-static inline void p256_clamp(uint8_t *k)
-{
-	k[0] = (k[0] | 0x80) & 0xbf;
-}
+/* Scalars are 32 big-endian bytes below n, drawn uniformly by the caller
+ * (see p256.c for how the ladder avoids its exceptional cases without
+ * constraining them). */
 
-/* out = [k]P, affine.  out must not alias P. */
-void p256_smult(uint8_t *out, const uint8_t *k, const uint8_t *P);
+/* The interpreter's file of field elements (p256.c).  Its last three
+ * slots, which the scalar multiplication never touches, are written
+ * directly by the caller: the scalar k of every multiplication (the host
+ * secret, the ephemeral key, the nonce), the ECDSA secret d and hash z. */
+extern uint8_t p256_w[16][32];
+#define P256_D p256_w[13]
+#define P256_K p256_w[14]
+#define P256_Z p256_w[15]
 
-/* ECDSA over the 32-byte hash z with secret d and nonce k (clamped):
- * rs = r || s, two 32-byte big-endian integers. */
-void ecdsa_sign(uint8_t *rs, const uint8_t *d, const uint8_t *k,
-                const uint8_t *z);
+/* out = [P256_K]P in wire form, 0x04 || x || y (65 bytes: a copy of
+ * p256_w[0..1], where the affine point is computed, behind the prefix). */
+void p256_smult(uint8_t *out, const uint8_t *P);
+
+/* ECDSA over P256_Z with secret P256_D and nonce P256_K:
+ * r || s, two 32-byte big-endian integers, at p256_w[0]. */
+void ecdsa_sign(void);
 
 #endif /* P256_H */

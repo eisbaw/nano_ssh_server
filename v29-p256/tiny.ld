@@ -12,8 +12,7 @@ ENTRY(_start)
 PHDRS { load PT_LOAD FLAGS(7) FILEHDR PHDRS; }
 SECTIONS {
     . = 0x400000 + SIZEOF_HEADERS;
-    .text   : SUBALIGN(1) { *(.text*) } :load
-    .rodata : SUBALIGN(1) { *(.rodata*) }
+    .text   : SUBALIGN(1) { *(.text*) *(.rodata*) } :load
     .data   : SUBALIGN(1) { *(.data.rel.ro*) *(.data*) }
     .bss    : { *(.bss*) *(COMMON) }
     /DISCARD/ : { *(.note*) *(.comment) *(.eh_frame*) }

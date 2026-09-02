@@ -3,84 +3,75 @@
 
 uint8_t fp_zero[FP_SIZE];
 uint8_t fp_one[FP_SIZE];
+const uint8_t *fp_m;
 
-void fp_select(uint8_t *dst, const uint8_t *zero, const uint8_t *one,
-               uint8_t cond)
+/* One pass computes s1 + s2 - m (in [-m, m)) or s1 + ~s2 + 1, which is
+ * s1 - s2 + 2^256 (in (2^256 - m, 2^256 + m)); in both cases the final
+ * carry, less the 1 the negation put in, is -1 exactly when the true value
+ * s1 + s2 - m or s1 - s2 is negative, and then m is added back.  The
+ * masks depend on the data, the branches do not. */
+void fp_addsub(uint8_t *d, const uint8_t *s1, const uint8_t *s2, int neg)
 {
-	const uint8_t mask = -cond;
-	int i;
-
-	for (i = 0; i < FP_SIZE; i++)
-		dst[i] = zero[i] ^ (mask & (one[i] ^ zero[i]));
-}
-
-uint32_t fp_try_sub(uint8_t *x, const uint8_t *m, uint32_t hi)
-{
-	uint8_t t[FP_SIZE];
-	int32_t c = 0;
+	const uint8_t *m = fp_m;
+	const unsigned nm = neg & 0xff;		/* 0 or 0xff */
+	int32_t c = -neg, mask;
 	int i;
 
 	for (i = FP_SIZE - 1; i >= 0; i--) {
-		c += x[i] - m[i];
-		t[i] = (uint8_t)c;
-		c >>= 8;		/* 0, or -1 on borrow */
-	}
-	/* V >= m  iff  hi >= borrow  iff  hi + c >= 0 */
-	c += (int32_t)hi;
-	fp_select(x, x, t, c >= 0);
-	return c >= 0 ? (uint32_t)c : 0;
-}
-
-void fp_addsub(uint8_t *d, const uint8_t *s1, const uint8_t *s2, int neg,
-               const uint8_t *m)
-{
-	int32_t c = 0;
-	int i;
-
-	/* subtraction is s1 + (m - s2): never below zero, below 2m */
-	for (i = FP_SIZE - 1; i >= 0; i--) {
-		c += s1[i] + (neg ? m[i] - s2[i] : s2[i]);
+		c += s1[i] + (s2[i] ^ nm) - (m[i] & ~nm);
 		d[i] = (uint8_t)c;
 		c >>= 8;
 	}
-	fp_try_sub(d, m, (uint32_t)c);
-}
-
-/* Shift-and-add over the bits of b, top down: r = 2r + (bit ? a : 0),
- * then at most two subtractions of m bring the sum (< 3m) back below m.
- * The addend is chosen with a cmov, so nothing depends on the bit. */
-void fp_mul(uint8_t *r, const uint8_t *a, const uint8_t *b, const uint8_t *m)
-{
-	int i, j;
-
-	memset(r, 0, FP_SIZE);
-	for (i = 0; i < 256; i++) {
-		const uint8_t *s = (b[i >> 3] >> (7 - (i & 7))) & 1 ? a : fp_zero;
-		uint32_t c = 0;
-
-		for (j = FP_SIZE - 1; j >= 0; j--) {
-			c += 2 * r[j] + s[j];
-			r[j] = (uint8_t)c;
-			c >>= 8;
-		}
-		c = fp_try_sub(r, m, c);
-		fp_try_sub(r, m, c);
+	mask = c + neg;
+	c = 0;
+	for (i = FP_SIZE - 1; i >= 0; i--) {
+		c += d[i] + (m[i] & mask);
+		d[i] = (uint8_t)c;
+		c >>= 8;
 	}
 }
 
-/* Fermat: x^(m-2).  Both exponents this server uses (p-2, n-2) have bit
- * 255 set, so the chain starts from x itself at bit 254; a clear bit
+/* Double-and-add over the bits of b, top down: r = 2r + (bit ? a : 0),
+ * each step a modular addition, so the reduction lives in fp_addsub() only.
+ * The addend is chosen with a cmov, so nothing depends on the bit.  The sum
+ * is read through acc, which points at fp_zero until the first step has
+ * written r, so r needs no clearing; i runs from -256 so the loop test is
+ * a plain inc/jne and the byte index is (i >> 3) + 32. */
+void fp_mul(uint8_t *r, const uint8_t *a, const uint8_t *b)
+{
+	const uint8_t *acc = fp_zero;
+	long i;
+
+	for (i = -256; i; i++) {
+		const uint8_t *s = (b[FP_SIZE + (i >> 3)] << (i & 7)) & 0x80 ?
+				   a : fp_zero;
+
+		fp_add(r, acc, acc);
+		fp_add(r, r, s);
+		acc = r;
+	}
+}
+
+/* Fermat: x^(m-2) by square-and-multiply over the bits of m - 2, which is
+ * m with its last byte lowered by 2 (the low byte is >= 2 for p and n).
+ * sq is the square of the result so far and points at fp_one before the
+ * first step, so the result needs no initialisation; a clear bit
  * multiplies by one instead of skipping, so the loop has no branch. */
-void fp_inv(uint8_t *r, const uint8_t *x, const uint8_t *m)
+/* noinline: its one caller is the p256.c interpreter loop, which would
+ * otherwise spill its decoded operands around the inlined body */
+__attribute__((noinline))
+void fp_inv(uint8_t *r, const uint8_t *x)
 {
 	uint8_t e[FP_SIZE], t[FP_SIZE];
-	int i;
+	const uint8_t *sq = fp_one;
+	long i;
 
-	memcpy(e, m, FP_SIZE);
+	memcpy(e, fp_m, FP_SIZE);
 	e[FP_SIZE - 1] -= 2;
-	memcpy(r, x, FP_SIZE);
-	for (i = 1; i < 256; i++) {
-		fp_mul(t, r, r, m);
-		fp_mul(r, t, (e[i >> 3] >> (7 - (i & 7))) & 1 ? x : fp_one, m);
+	for (i = -256; i; i++) {
+		fp_mul(r, sq, (e[FP_SIZE + (i >> 3)] << (i & 7)) & 0x80 ?
+			      x : fp_one);
+		fp_mul(t, r, r);
+		sq = t;
 	}
 }

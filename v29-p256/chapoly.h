@@ -70,7 +70,8 @@ static void chacha_xor(const uint8_t *key, uint32_t seq, uint32_t ctr,
 static void poly1305(uint8_t *tag, const uint8_t *key,
                      const uint8_t *m, size_t len)
 {
-	uint8_t p[FP_SIZE], r[FP_SIZE], h[FP_SIZE], t[FP_SIZE];
+	static uint8_t p[FP_SIZE];	/* static: fp_m points at it */
+	uint8_t r[FP_SIZE], h[FP_SIZE], t[FP_SIZE];
 	unsigned c = 0;
 	int i;
 
@@ -81,6 +82,7 @@ static void poly1305(uint8_t *tag, const uint8_t *key,
 	}
 	p[15] = 3;
 	p[31] = 0xfb;
+	fp_m = p;
 	/* clamp: LE r[3,7,11,15] &= 15, r[4,8,12] &= 252 (the last pair's
 	 * &= 252 lands on r[15], which is zero anyway) */
 	for (i = 28; i > 12; i -= 4) {
@@ -96,8 +98,8 @@ static void poly1305(uint8_t *tag, const uint8_t *key,
 
 			t[i] = j < n ? m[j] : j == n;
 		}
-		fp_add(t, t, h, p);		/* t = block + h      */
-		fp_mul(h, t, r, p);		/* h = t * r mod p    */
+		fp_add(t, t, h);		/* t = block + h      */
+		fp_mul(h, t, r);		/* h = t * r mod p    */
 		m += n;
 		len -= n;
 	}
