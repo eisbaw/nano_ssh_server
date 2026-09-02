@@ -1,0 +1,150 @@
+v28-chapoly optimization log
+============================
+Baseline: v27-onecurve, rebuilt in the same environment for a fair comparison
+(gcc 13.3, binutils 2.42, Ubuntu 24.04 x86-64): 9,946 bytes - identical to
+the number v27-onecurve's own log records.
+
+The theme is the one v27-onecurve's log left as "not attempted": the packet
+cipher.  aes128-ctr + hmac-sha2-256 cost ~950 bytes (S-box, key schedule,
+rounds, CTR, HMAC wrapper).  chacha20-poly1305@openssh.com needs a ChaCha20
+stream (~300 bytes) and a Poly1305 tag - and Poly1305 is h = (h + c) * r
+mod 2^130-5, which is exactly the generic modular arithmetic fprime.c already
+provides for the Ed25519 scalar field.  So the tag costs a second modulus (built
+in place from three constants) and ~330 bytes of glue, and the AES core and HMAC are gone.
+Once the fprime routines are the workhorse, the same "reuse what is linked"
+argument reaches the SHA constant generator, the field normalization, the
+scalar reduction and the field inverse, and the rest of the steps are byte
+golf on the protocol code.
+
+Every step was measured; where several independent steps were tried in
+parallel against the same base and then applied together, the table gives
+the measured size after the group and the individual deltas in brackets
+(they do not always add up exactly: inlining decisions shift a little).
+
+Step                                                    Size (B)   Delta
+------------------------------------------------------  --------  ------
+v27-onecurve baseline (rebuilt)                            9,946       -
+ 1. chacha20-poly1305@openssh.com instead of aes128-ctr
+    + hmac-sha2-256 (chapoly.h).  ChaCha20 with the
+    quarter-round operands computed from the round
+    index; Poly1305 on fprime_add()/fprime_mul() with
+    p = 2^130-5; 64-byte keys derived straight into the
+    two direction states, no IVs or MAC keys; the
+    sequence number doubles as the "keys in use" flag;
+    one aead() routine serves both directions (tag over
+    the ciphertext before decrypting, after encrypting)   9,696    -250
+ 2. Poly1305 buffers filled by plain loops instead of
+    five memset()/three memcpy() calls; the per-block
+    add and multiply alternate two buffers, no copy         9,600     -96
+ 3. PUT32/GET32 as one bswap and one unaligned access
+    (u32a/u64a typedefs in nolibc.h: x86-64 only, which
+    the raw syscalls already assume)                        9,440    -160
+ 4. Same for the SHA-256/SHA-512 word loads and stores;
+    KEXINIT's trailing five zero bytes as one memset
+    [-96, -32 measured alone]                               9,344     -96
+ 5. SHA constant generator on fprime_mul(): the 3.64
+    fixed-point candidate root is raised to the power e
+    under the modulus 2^208, which exceeds every product
+    and so never reduces - a 256-bit multiply for no
+    code; mul256_64() and the 128-bit compare are gone      9,280     -64
+ 6. SHA-256 working variables a..h as one array: the
+    per-round rotation is a shift of the array instead
+    of seven moves                                          9,152    -128
+ 7. The same for SHA-512                                    8,960    -192
+ 8. f25519: one shared carry tail (mask bit 255, fold it
+    back as 19, propagate) for add/sub/mul/mul_c/
+    normalize [-128]; fprime_from_bytes() as plain
+    shift-and-reduce over every bit, no preload [-160];
+    f25519_normalize() = carry tail + fprime.c's
+    raw_try_sub() with p built in place [-32]; f25519_add
+    and f25519_sub folded into f25519_addsub(r,a,b,neg),
+    the addition-law interpreter passing the op bit [-32]   8,640    -320
+ 9. USERAUTH matched whole: the one acceptable request
+    is a fixed 55-byte message, compared with memcmp
+    instead of parsed field by field [-153]; send_chan()
+    for the five [type][channel][body] messages [-48];
+    f25519_pow(): one square-and-multiply loop for both
+    exponents (p-2 = 2^255-21 and (p-5)/8 = 2^252-3 are
+    "all ones above a few low bits"), multiplying by one
+    on a zero bit so there is no branch; replaces
+    exp2523() + the ^8 * x^3 inverse [-96]; f25519_mul_c
+    replaced by an add [0]                                  8,311    -329
+10. Listening address as 16 bytes of rodata [-16];
+    fprime_mul() adds (bit ? a : zero) with a cmov
+    instead of copy + add + select [-32]                    8,263     -48
+11. X25519 scalar clamped in place (idempotent; the key
+    is used for nothing else) instead of on a copy          8,231     -32
+12. Packets received in place: recv_packet() reads into
+    the caller's buffer and the payload sits at +5, no
+    private 4 KB buffer and no copy out [-32]; the
+    connection socket is a global instead of an argument
+    threaded through ~25 call sites [-96]; the SHA-512
+    block for the Ed25519 challenge is assembled by one
+    loop from R, A and M (no 96-byte staging buffer, no
+    memcpy/memset) [-32]                                    8,039    -192
+13. Literal lengths at compile time: sizeof() for the
+    version string, fld_is() as a macro (strlen() is a
+    real call in a freestanding build)                      7,943     -96
+14. RFC 7748 5: mask bit 255 of the peer's X25519 u
+    before decoding it (the field code would otherwise
+    fold that bit in as +19).  Neither v27 nor the c25519
+    ladder before it did this; a compliant peer never
+    sets the bit, so it is a conformance fix, not a
+    size step - one and-instruction, 32 bytes on the
+    file at this alignment                                  7,975     +32
+------------------------------------------------------  --------  ------
+Total                                                      7,975  -1,971
+                                                                  (-19.8%)
+
+Verification after every step with the real OpenSSH client (9.6p1):
+  sshpass -p password123 ssh -p 2222 user@localhost  ->  "Hello World"
+plus a wrong-password rejection and a second connection to the same server
+process.  Full suite: tests/run_tests.sh v28-chapoly -> 3/3 PASSED.
+Steps 1, 5, 8 and 9 change the packet crypto, the hash constants and the
+field arithmetic, so the final binary was additionally checked with a
+50-connection run against one server process (each connection draws fresh
+X25519 and Ed25519 randomness, the client verifies the host-key signature,
+and every packet is authenticated by Poly1305): 50/50 passed.
+
+Rejected / no-effect experiments:
+- Constant generator on byte arrays with fprime's raw_add()/shift_n_bits()
+  (shift-and-add over the candidate's bits): 0 - the memsets ate the gain;
+  step 5's fprime_mul() form is the one that pays.
+- Rolling 16-word SHA-256 message schedule (as sha512_block uses): +32,
+  before and after step 6.
+- One SHA-2 compression function for both hashes (64-bit words masked to the
+  width, rotation amounts from a 12-byte row, 48 + w/2 rounds): the core
+  came out the same size as the two it replaced, and the 64-bit SHA-256
+  context cost ~70 bytes in init/update/final.  +56.
+- sha256_final() feeding its padding through sha256_update(): 0 (twice).
+- derive() noinline: +32.  aead() noinline: 0.
+- Host-key blob built inside the KEX reply and hashed from there: 0.
+- Signature written straight into the reply: 0.  ChaCha state set up by one
+  loop instead of two memcpy(): 0.  Tighter put_mpint(): 0.
+- K's mpint encoded once for the exchange hash and the derivation: +32.
+- Flags: inherited from v26/v27 (-Oz, single-invocation LTO, tiny.ld,
+  SUBALIGN(1), sstrip.py); no new flag helped.
+- UPX/compression: forbidden by project rules (and pointless for the in-RAM
+  footprint this project actually targets).
+
+Cost of the changes, honestly stated:
+- Startup.  The SHA constants are now generated with 208-iteration
+  shift-and-add multiplies (about 10,000 of them): the server takes 0.3-0.5 s
+  to reach listen() on this machine, against ~15 ms for v27-onecurve.  The
+  project's test scripts wait 2 s / 5 s before connecting.
+- Speed.  Poly1305 runs bit-serially through fprime_mul() (~1-2 MB/s), the
+  SHA-2 rounds shift an array instead of renaming registers, and the field
+  inverse is a full square-and-multiply with a multiply on every bit.  A
+  handshake is still well under a second; all of this only makes sense
+  because the target is code size.
+- Interoperability.  The server offers exactly chacha20-poly1305@openssh.com
+  and sends empty mac name-lists (an AEAD cipher carries its own MAC, and
+  OpenSSH skips MAC negotiation for it); a client that insists on a non-empty
+  mac list, or that lacks the OpenSSH AEAD, cannot connect.  USERAUTH is
+  accepted only as the exact message OpenSSH sends for user "user" /
+  password "password123" over service "ssh-connection"; v27 ignored the
+  service name.  Received packets must fit 512 bytes after NEWKEYS (the
+  KEXINIT buffer is still 4 KB).
+- Inherited from v27-onecurve: no on-curve check of the peer's X25519 point
+  (bit 255 is masked now, but a twist point is still not rejected),
+  randomised (getrandom-based) Ed25519 signing.

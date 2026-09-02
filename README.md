@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **9,946 bytes** (`v27-onecurve`, fully static,
+The smallest working build is **7,975 bytes** (`v28-chapoly`, fully static,
 zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v27-onecurve         # recommended/smallest: 9.7 KB, fully static
-just run v27-onecurve           # listens on 2222
+just build v28-chapoly          # recommended/smallest: 7.8 KB, fully static
+just run v28-chapoly            # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +26,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version      | Bytes   | Size   | Linkage                | Notes                                |
 |--------------|---------|--------|------------------------|--------------------------------------|
-| v27-onecurve |   9,946 | 9.7 KB | static, no libc        | Recommended/smallest: one Curve25519 implementation for KEX and signing |
+| v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | Recommended/smallest: chacha20-poly1305 on the Ed25519 field arithmetic |
+| v27-onecurve |   9,946 | 9.7 KB | static, no libc        | One Curve25519 implementation for KEX and signing |
 | v26-genk     |  12,074 |  12 KB | static, no libc        | v25-pack + generated SHA/Ed25519 constants + ELF golf |
 | v25-pack     |  14,576 |  14 KB | static, no libc        | v23-min + computed AES S-box + packed exchange hash |
 | v23-min      |  14,800 |  14 KB | static, no libc        | from-scratch main + freestanding syscalls |
@@ -40,12 +41,28 @@ smallest first. Run `just size-report` to regenerate.
 | v17-static2  |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
 | v0-vanilla   | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
 
-Exact byte counts vary a little with the toolchain. `v27-onecurve`'s 9,946 and
-`v26-genk`'s 12,074 were measured with the same gcc 13.3 / binutils 2.42, so
-the like-for-like saving is 2,128 bytes (−17.6%). (The freestanding builds are
-`-nostdlib`, so musl-gcc and plain gcc emit identical bytes.) `v25-pack`
-rebuilt with that toolchain is 13,928 bytes. See each version's
-`optimization_log.txt` for the step-by-step breakdown.
+Exact byte counts vary a little with the toolchain. `v28-chapoly`'s 7,975,
+`v27-onecurve`'s 9,946 and `v26-genk`'s 12,074 were measured with the same
+gcc 13.3 / binutils 2.42, so the like-for-like savings are 1,971 bytes
+(−19.8%) and 2,128 bytes (−17.6%). (The freestanding builds are `-nostdlib`,
+so musl-gcc and plain gcc emit identical bytes.) `v25-pack` rebuilt with that
+toolchain is 13,928 bytes. See each version's `optimization_log.txt` for the
+step-by-step breakdown.
+
+`v28-chapoly` changes the packet cipher from aes128-ctr + hmac-sha2-256 to
+chacha20-poly1305@openssh.com. The point is not ChaCha20 itself but Poly1305:
+its tag is `h = (h + c) · r mod 2^130−5`, which is exactly the generic
+modular arithmetic `fprime.c` already links for the Ed25519 scalar field, so
+the AEAD costs a ChaCha20 core plus three bytes of modulus, and the AES S-box,
+key schedule, rounds, CTR and HMAC wrapper all go. The same "run it on what
+is already linked" argument then moves the SHA constant generator onto
+`fprime_mul` (under a power-of-two modulus that never reduces), the field
+normalization onto `fprime.c`'s conditional subtract, and the field inverse
+and square root onto one square-and-multiply loop; the remaining steps are
+protocol golf (wire words as one `bswap` + unaligned access, the userauth
+request matched as a whole, packets received in place, a global socket).
+The cost is a ~0.5 s startup (the constants are generated with bit-serial
+multiplies) and a slower, bit-serial Poly1305.
 
 `v27-onecurve` starts from the observation that `v26-genk` carried two full
 Curve25519 implementations: the c25519 Montgomery ladder for the key exchange
@@ -109,6 +126,13 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   exchange-hash field hashing into one helper (`v25-pack`). Note the computed
   S-box is not constant-time (data-dependent); a non-issue for this educational
   server but do not carry the pattern into production crypto.
+- AEAD on the scalar field (`v28-chapoly`): chacha20-poly1305@openssh.com
+  replaces aes128-ctr + hmac-sha2-256, with Poly1305 running on the generic
+  `fprime` modular arithmetic already linked for Ed25519 (a second modulus,
+  no dedicated 130-bit code); the SHA constant generator, field
+  normalization, scalar reduction and field inverse are likewise re-expressed
+  on routines already present, and the wire code uses `bswap` + unaligned
+  access, whole-message userauth matching and in-place packet receive
 - One curve implementation (`v27-onecurve`): X25519 runs on the Edwards group
   law linked for Ed25519, so the Montgomery ladder disappears; the field
   inverse is `exp2523(x)^8 · x^3` so one exponentiation chain serves both the
@@ -169,10 +193,11 @@ nano_ssh_server/
 
 ## Status
 
-Thirteen production versions are validated end-to-end against a real OpenSSH
+Fourteen production versions are validated end-to-end against a real OpenSSH
 client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
 `v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
-`v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`.
+`v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`,
+`v28-chapoly`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -197,9 +222,13 @@ This is an educational project. The server uses hardcoded credentials, runs
 single-threaded, has no DoS protection, and is not hardened. Do not deploy.
 Two size optimizations also weaken the crypto in ways that matter only if you
 ignore that advice: the AES S-box is computed with data-dependent operations
-(`v25-pack`), and `v27-onecurve` accepts an X25519 peer point without checking
-that it is on the curve — a twist point yields a wrong shared secret and the
-handshake fails at the first MAC check, rather than being rejected outright.
+(`v25-pack`), and `v27-onecurve`/`v28-chapoly` accept an X25519 peer point
+without checking that it is on the curve — a twist point yields a wrong shared
+secret and the handshake fails at the first MAC check, rather than being
+rejected outright. `v28-chapoly` also offers only chacha20-poly1305@openssh.com
+with empty MAC name-lists (valid for an AEAD cipher; OpenSSH accepts it, a
+stricter client may not) and accepts the userauth request only in the exact
+form OpenSSH sends it.
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.
 
