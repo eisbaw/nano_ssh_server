@@ -242,30 +242,19 @@ static size_t put_mpint(uint8_t *b, const uint8_t *d, size_t n) {
     return 4 + n;
 }
 
-/* ---- hash an SSH string that sits in memory with its length prefix ---- */
-static void sha_pstr(const uint8_t *p) {
-    sha256_update(p, 4 + GET32(p));
-}
-
 /* ---- derive one 64-byte key per RFC4253 7.2 ----
  * K1 = HASH(K || H || id || session_id), K2 = HASH(K || H || K1); the only
  * keys this cipher needs are the two 64-byte encryption keys, so the length
- * is fixed and both hashes are always taken. */
-static void derive(uint8_t *out, const uint8_t *mp, const uint8_t *H,
-                   char id) {
-    for (int j = 0; j < 2; j++) {
-        sha256_update(mp, H + 32 - mp);   /* K || H: H follows the mpint */
-        if (j) {
-            sha256_update(out, 32);
-        } else {
-            /* the letter is parked in the key's first byte, which the
-             * hash output overwrites below */
-            out[0] = (uint8_t)id;
-            sha256_update(out, 1);
-            sha256_update(H, 32);   /* session id == H: never rekeys */
-        }
-        sha256_final(out + 32 * j);
-    }
+ * is fixed and both hashes are always taken.  mp holds K || H with room
+ * behind it: id || H goes there for K1, and K1 replaces it for K2 (the
+ * session id is H on a server that never rekeys). */
+static void derive(uint8_t *out, uint8_t *mp, const uint8_t *H, char id) {
+    uint8_t *t = (uint8_t *)H + 32;
+    t[0] = (uint8_t)id;
+    memcpy(t + 1, H, 32);
+    sha256(out, mp, t + 33 - mp);
+    memcpy(t, out, 32);
+    sha256(out + 32, mp, t + 32 - mp);
 }
 
 /* A fresh P-256 scalar in the multiplier's scalar slot, uniform in
@@ -288,7 +277,7 @@ static void handle(void) {
      * sides send KEXINIT without waiting for the other's, so the client's
      * can come first).  Room for the longest version line, a full-size
      * packet and the server's list. */
-    static uint8_t hb[4 + 256 + 4 + 15 + 4096 + 16 + 256];
+    static uint8_t hb[4 + 256 + 4 + 15 + 4096 + 16 + 256 + 512];
     uint8_t *cver = hb + 4;
     /* version exchange */
     if (xsend(vs + 4, sizeof(V_S) + 1)) return;
@@ -335,21 +324,20 @@ static void handle(void) {
         *(u64a *)kinit << 16 != 0x04410000001e0000u) return;
     p256_smult(shared, kinit + 6);          /* K = x coordinate, at +1 */
 
-    /* exchange hash H = SHA256(V_C||V_S||I_C||I_S||K_S||Q_C||Q_S||K) */
-    /* K as an SSH string, with H written right after it: the key
-     * derivation hashes K || H four times */
-    static uint8_t mp[4 + 33 + 32];
+    /* exchange hash H = SHA256(V_C||V_S||I_C||I_S||K_S||Q_C||Q_S||K): the
+     * remaining four strings are copied in behind I_S (K_S and Q_S from
+     * the reply, Q_C from the client's packet, all with their length
+     * prefixes), K's mpint is written after them and H itself follows it,
+     * as the key derivation hashes K || H four times */
+    uint8_t *t = skex + 4 + skexl;
+    memcpy(t, rep + REP_KS, REP_QS - REP_KS); t += REP_QS - REP_KS;
+    memcpy(t, kinit + 1, 69); t += 69;
+    memcpy(t, rep + REP_QS, 69); t += 69;
+    uint8_t *mp = t;
     uint8_t *H = mp + put_mpint(mp, shared + 1, 32);
-    sha256_init();
-    sha256_update(hb, skex + 4 + skexl - hb);   /* V_C || V_S || I_C || I_S */
-    sha_pstr(rep + REP_KS);
-    sha_pstr(kinit + 1);
-    sha_pstr(rep + REP_QS);
-    sha_pstr(mp);
-    sha256_final(H);
+    sha256(H, hb, H - hb);
     /* ECDSA signs SHA-256(H), hashed straight into its input slot */
-    sha256_update(H, 32);
-    sha256_final(P256_Z);
+    sha256(P256_Z, H, 32);
     rand_scalar();
     ecdsa_sign();
     const uint8_t *rs = *p256_w;            /* r || s */

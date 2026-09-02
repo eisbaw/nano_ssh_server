@@ -20,23 +20,12 @@
 #define SHA256_BLOCK_SIZE 64
 #define SHA256_DIGEST_SIZE 32
 
-typedef struct {
-    uint32_t state[8];
-    uint8_t buffer[SHA256_BLOCK_SIZE];
-    uint64_t bitlen;
-    uint32_t buflen;
-} sha256_ctx;
-
 /* K[0..63] followed by the initial state (first 8 of 64 used: bss is free
  * and filling all 64 saves an i < 8 test) in one array */
 static uint32_t sha256_t[128];
 #define sha256_k  sha256_t
 #define sha256_h0 (sha256_t + 64)
 
-/* The one context.  Every hash this server takes runs to completion
- * before the next one starts, so the routines work on this static
- * context and no caller passes (or keeps reloading) a pointer to it. */
-static sha256_ctx hctx;
 
 /* one sqrtsd, whatever the math flags (the unit test builds without them) */
 static inline double sqrtsd(double v) {
@@ -87,10 +76,8 @@ static void sha_gentables(void) {
 #define SIG0(x) (ROTR(x, 7) ^ ROTR(x, 18) ^ ((x) >> 3))
 #define SIG1(x) (ROTR(x, 17) ^ ROTR(x, 19) ^ ((x) >> 10))
 
-static inline void sha256_transform(void) {
-    sha256_ctx *ctx = &hctx;
+static void sha256_transform(uint32_t *state, const uint8_t *p) {
     uint32_t m[64], t1, t2;
-    uint8_t *p = ctx->buffer;
 
     for (int i = 0; i < 16; i++, p += 4)
         m[i] = __builtin_bswap32(*(const u32a *)p);
@@ -100,7 +87,7 @@ static inline void sha256_transform(void) {
     /* Working variables a..h as one array: the per-round rotation
      * h=g, g=f, ... b=a is a shift of the array instead of seven moves. */
     uint32_t s[8];
-    memcpy(s, ctx->state, sizeof(s));
+    memcpy(s, state, sizeof(s));
     for (int i = 0; i < 64; i++) {
         t1 = s[7] + EP1(s[4]) + CH(s[4], s[5], s[6]) + sha256_k[i] + m[i];
         t2 = EP0(s[0]) + MAJ(s[0], s[1], s[2]);
@@ -108,47 +95,37 @@ static inline void sha256_transform(void) {
         s[4] += t1;
         s[0] = t1 + t2;
     }
-    for (int i = 0; i < 8; i++) ctx->state[i] += s[i];
+    for (int i = 0; i < 8; i++) state[i] += s[i];
 }
 
-static inline void sha256_init(void) {
-    sha256_ctx *ctx = &hctx;
-    memcpy(ctx->state, sha256_h0, sizeof(ctx->state));
-    ctx->bitlen = 0;
-    ctx->buflen = 0;
-}
+/* One-shot hash of a contiguous message: every input this server hashes
+ * is assembled in a buffer first, so there is no streaming context, no
+ * partial-block buffering and no separate final step - just the full
+ * blocks, then one or two padded tail blocks built by a single loop. */
+static void sha256(uint8_t *out, const uint8_t *m, size_t len) {
+    uint32_t st[8];
+    uint8_t blk[SHA256_BLOCK_SIZE];
+    size_t i, n = len;
 
-static inline void sha256_update(const uint8_t *data, uint32_t len) {
-    sha256_ctx *ctx = &hctx;
-    for (uint32_t i = 0; i < len; i++) {
-        ctx->buffer[ctx->buflen++] = data[i];
-        if (ctx->buflen == SHA256_BLOCK_SIZE) {
-            sha256_transform();
-            ctx->bitlen += 512;
-            ctx->buflen = 0;
-        }
+    memcpy(st, sha256_h0, sizeof(st));
+    while (n >= SHA256_BLOCK_SIZE) {
+        sha256_transform(st, m);
+        m += SHA256_BLOCK_SIZE;
+        n -= SHA256_BLOCK_SIZE;
     }
-}
-
-static inline void sha256_final(uint8_t *hash) {
-    sha256_ctx *ctx = &hctx;
-    uint32_t i = ctx->buflen;
-
-    ctx->buffer[i++] = 0x80;
-    if (i > 56) {
-        while (i < 64) ctx->buffer[i++] = 0;
-        sha256_transform();
-        i = 0;
+    /* tail: the last n < 64 bytes, 0x80, zeros, then the 64-bit bit length
+     * at the end of the block - or of a second block if n > 55 */
+    for (i = 0; i < SHA256_BLOCK_SIZE; i++)
+        blk[i] = i < n ? m[i] : i == n ? 0x80 : 0;
+    if (n > 55) {
+        sha256_transform(st, blk);
+        memset(blk, 0, SHA256_BLOCK_SIZE);
     }
-    while (i < 56) ctx->buffer[i++] = 0;
-
-    ctx->bitlen += ctx->buflen * 8;
-    *(u64a *)(ctx->buffer + 56) = __builtin_bswap64(ctx->bitlen);
-    sha256_transform();
+    *(u64a *)(blk + 56) = __builtin_bswap64((uint64_t)len << 3);
+    sha256_transform(st, blk);
 
     for (i = 0; i < 8; i++)
-        *(u32a *)(hash + i * 4) = __builtin_bswap32(ctx->state[i]);
-    sha256_init();   /* ready for the next hash */
+        *(u32a *)(out + i * 4) = __builtin_bswap32(st[i]);
 }
 
 /* Constant-time comparison: zero iff the two n-byte values are equal. */
