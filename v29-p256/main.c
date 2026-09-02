@@ -14,7 +14,9 @@
 #include "chapoly.h"
 #include "sha256.h"
 
-#define PORT 2222
+#ifndef PORT
+#define PORT 2222          /* make PORT=n builds a server on another port */
+#endif
 #define V_S  "SSH-2.0-NanoSSH"
 
 #define MSG_DISCONNECT 1

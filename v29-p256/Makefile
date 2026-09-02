@@ -21,6 +21,7 @@
 # Override with `make CC=gcc` outside the Nix shell.
 
 CC ?= musl-gcc
+PORT ?= 2222
 CFLAGS = -Wall -Wextra -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-stack-protector \
          -fmerge-all-constants -fno-ident -finline-small-functions \
@@ -28,7 +29,8 @@ CFLAGS = -Wall -Wextra -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fvisibility=hidden -Wno-unused-result -fno-plt \
          -fipa-pta -fno-common -fcf-protection=none \
          -fno-inline-functions-called-once \
-         -nostdlib -ffreestanding -static -fno-stack-clash-protection
+         -nostdlib -ffreestanding -static -fno-stack-clash-protection \
+         -DPORT=$(PORT)
 LDFLAGS = -nostdlib -static -Wl,--gc-sections -Wl,--strip-all \
           -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr \
           -Wl,-n -Wl,-T,tiny.ld
