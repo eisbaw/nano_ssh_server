@@ -1,0 +1,199 @@
+v29-p256 optimization log
+=========================
+Baseline: v28-chapoly, rebuilt in the same environment for a fair comparison
+(gcc 13.3, binutils 2.42, Ubuntu 24.04 x86-64): 7,975 bytes - identical to
+the number v28-chapoly's own log records.
+
+The theme is the last duplication v28-chapoly left standing.  Its handshake
+needed two curves - Curve25519 for the key exchange and Ed25519 for the host
+key, which v27 had already folded onto one group law but which still needed
+the Montgomery<->Edwards mapping, a square root and a dedicated 2^255-19
+field with its own carry folding - and two hashes, because the Ed25519
+challenge is SHA-512 while everything else in the handshake is SHA-256.
+NIST P-256 serves the key exchange (ecdh-sha2-nistp256) and the signature
+(ecdsa-sha2-nistp256) in one coordinate system, and ECDSA hashes with
+SHA-256, so with P-256 the SHA-512 core, the 2^255-19 field code, the
+square root and the curve mapping all go.  What is left of the public-key
+crypto is one generic modular multiplier (fp.c: shift-and-add, any 256-bit
+modulus) and one short-Weierstrass double-and-add program; the multiplier
+also runs the group-order arithmetic of ECDSA and, as in v28, Poly1305.
+
+Every step was measured; where several independent steps were explored in
+parallel against the same base and then applied together, the table gives
+the measured size after the group and the individual deltas, as measured
+against that base, in brackets (they do not add up exactly: inlining
+decisions shift a little, and .text savings only reached the file in
+32-byte quanta until step 8).
+
+Step                                                    Size (B)   Delta
+------------------------------------------------------  --------  ------
+v28-chapoly baseline (rebuilt)                             7,975       -
+ 1. NIST P-256 for the key exchange and the host key
+    (ecdh-sha2-nistp256, ecdsa-sha2-nistp256), on one
+    generic big-endian shift-and-add modular multiplier
+    (fp.c) with three moduli: the field prime, the group
+    order and Poly1305's 2^130-5.  Projective double-
+    and-add (dbl-1998-cmo-2 / add-1998-cmo-2) as a
+    41-instruction program over a flat file of field
+    elements run by a small interpreter; the scalar's
+    top bits fixed so the ladder never meets an
+    exceptional case (replaced in step 9).  ECDSA's
+    digest is SHA-256, so SHA-512 goes; its constants
+    generated from 128-bit integer roots.  Deletes
+    f25519.c, ed25519.c, edsign.c, x25519_ed.c, sha512.c
+    (the Curve25519 field with its carry folding, the
+    Edwards group law, the Montgomery mapping, the
+    square root, the SHA-512 core and its 64-bit root
+    extraction); big-endian elements mean every wire
+    value is used in place                                 6,313  -1,662
+ 2. Golf round 1, eight themes explored in parallel against
+    step 1 and merged by hand; each theme's own measured
+    delta against 6,313 in brackets:
+    - KEX_ECDH_REPLY built in place: a static reply buffer
+      whose constant head (type, the host-key blob K_S =
+      string name || string curve || string 04||x||y, the
+      length prefix of Q_S) is built once at startup and
+      shares its bytes with the KEXINIT name-list; the
+      multiplier writes Q_S straight into it, the
+      signature follows, and the exchange hash reads K_S
+      and Q_S from there in wire form; the client's
+      version line and KEXINIT received into the transcript
+      buffer where they sit as SSH strings (the packet
+      header overwritten with the string length), our
+      KEXINIT built right after them; SERVICE_ACCEPT is the
+      request with its type byte changed; NEWKEYS is the
+      client's, echoed; USERAUTH_FAILURE a constant;
+      USERAUTH_SUCCESS the matched request's type byte;
+      one static SHA-256 context; put_mpint with one copy
+      and an unconditional sign byte; the KEX_ECDH_INIT
+      check as one masked 64-bit compare; static packet
+      buffers [-474]
+    - p256.c: a 2-byte instruction {dst<<4|src1,
+      op<<6|modulus|src2} over 16 slots, the doubling done
+      in place (each coordinate overwritten after its last
+      use), B = 2XR as a multiply and an add (39
+      instructions), the element file static, the affine
+      conversion (with an INV opcode) and ECDSA (5
+      instructions, run mod n on the same file) as two more
+      programs, one interpreter run(ip) ended by a 0xf0
+      marker, the scalar read from a slot, the multiplier
+      emitting the 65-byte wire form itself, fp_inv
+      noinline (its inlined body made run() spill) [-327]
+    - fp.c: the modulus a global set once per caller, one
+      masked two-pass routine for add and sub (pass one
+      computes s1 + s2 - m or s1 - s2 + 2^256 with a signed
+      carry, pass two adds m back under a mask), the
+      multiplier as two such additions per bit, fp_try_sub
+      and fp_select gone, fp_inv's result and fp_mul's
+      accumulator read through a pointer that starts at
+      one/zero so neither needs initialising, negative
+      loop counters [-160]
+    - SHA-256 constants from double precision: the cube
+      root as the fixed point of x = sqrt(q / x) (one divsd
+      and one sqrtsd per step, 99 steps), the same
+      recurrence stopped after two steps for the square
+      root, the primes by a descending trial divisor, both
+      passes through one loop body, the scale 2^32 by 32
+      doublings so no constant is stored; ~95 bytes of code
+      against the ~250 of the 128-bit integer extraction
+      [-128]                                                  5,431    -882
+ 3. .rodata placed inside the .text output section: the
+    32-byte-aligned constant tables had given the .rodata
+    output section a 32-byte alignment that SUBALIGN(1) did
+    not lower, so up to 31 bytes of padding sat between the
+    sections (and .text savings only showed in 32-byte
+    steps)                                                     5,411     -20
+ 4. One-shot SHA-256 over a contiguous transcript: the
+    remaining strings (K_S, Q_C, Q_S with their prefixes)
+    copied in behind I_S, K's mpint written after them and
+    H itself after that, the key derivation's id || H and
+    K1 appended in place, so every hash is one call over
+    one buffer - no streaming context, no partial-block
+    buffer, no separate final step; the padded tail block
+    is built by one loop                                        5,324     -87
+ 5. One ladder path: the k + 2n case (k < 2^256 - n) cost a
+    compare and a second addition; redrawing a scalar whose
+    top word is zero instead (one test) leaves the scalar
+    uniform over [2^224, n) and the ladder exception-free
+    for every scalar it can be given                            5,299     -25
+------------------------------------------------------  --------  ------
+Total (so far)                                             4,975  -3,000
+                                                                  (-37.6%)
+
+Verification after every step with the real OpenSSH client (9.6p1):
+  sshpass -p password123 ssh -p 2222 user@localhost  ->  "Hello World"
+plus a wrong-password rejection and further connections to the same server
+process (20-40 per step).  Full suite: tests/run_tests.sh v29-p256 -> 3/3
+PASSED.  The crypto core is additionally covered by a native unit test
+(SHA-256 vectors including the padding boundaries, the RFC 8439 Poly1305
+vector, P-256 scalar multiplication and ECDSA against a Python reference,
+and the edge scalars of the ladder) and, at the baseline, by an
+independent differential fuzz of fp.c/p256.c against big-integer
+arithmetic (320,800 field cases, 700+ curve cases, 354 Poly1305 cases, no
+mismatch), a protocol review and a live malformed-input fuzz.
+
+Rejected / no-effect experiments (all measured):
+- _start as the C entry point (force_align_arg_pointer): +40.
+- A static rodata K/H0 table instead of the SHA-256 generator: +64 over
+  the integer generator, +192 over the double-precision one; a bit-by-bit
+  root search in doubles: +80 over the recurrence; x87 long double: +68.
+- fp_mul/fp_inv as one shared scan driver with a function pointer: 0 or
+  worse (register pressure).
+- fp_try_sub kept as a separate routine under the two-pass fp_addsub: 0.
+- 3-operand mul with a copy inside the interpreter (2-byte encoding needs
+  16 slots; the in-place doubling made the slots fit instead).
+- The exchange-hash strings hashed individually from the reply buffer
+  instead of copied behind I_S: 0.
+- A flat four-hash derive() loop: +4..+11; the key letter from a "CD"
+  literal: +2.
+- r and s as fixed 33-byte mpints (not RFC 4251 compliant anyway): +12.
+- The six round-1 flags listed under step 7: 0 on the final code.
+- UPX/compression: forbidden by project rules (and pointless for the
+  in-RAM footprint this project actually targets).
+
+Cost of the changes, honestly stated:
+- Speed.  Every field operation runs on the bit-serial generic multiplier
+  (~250 K instructions per P-256 multiplication) and the projective ladder
+  needs 22 of them per scalar bit: a handshake takes ~0.55 s of server CPU
+  on this machine against ~0.07 s for v28-chapoly, and startup (one scalar
+  multiplication for the host key) ~0.2 s.  On a microcontroller this
+  scales accordingly; the trade only makes sense because the target is
+  code size.
+- Interoperability.  The server offers exactly ecdh-sha2-nistp256,
+  ecdsa-sha2-nistp256 and chacha20-poly1305@openssh.com (with empty mac
+  name-lists, as v28); a client without P-256 support cannot connect.  The
+  KEX_ECDH_INIT must carry an uncompressed 65-byte point, USERAUTH is
+  accepted only as the exact message OpenSSH sends, SERVICE_ACCEPT echoes
+  whatever service the client asked for, and the client's NEWKEYS is
+  awaited before ours is sent (OpenSSH sends its own as soon as it has the
+  reply).  Received packets must fit 512 bytes after NEWKEYS.
+- Security, beyond what the README lists for every version: no range or
+  on-curve check of the peer point; scalars uniform over [2^224, n) rather
+  than [1, n); a cmov-selected pointer in fp_mul (a cache-timing channel);
+  the four exceptional ladder scalars are unreachable but nothing checks r
+  or s for zero (probability 2^-256).  See the README's Security section.
+ 6. The program header packed into the tail of the ELF
+    header (sstrip.py): of the ELF header the kernel reads
+    only the magic, class, e_type, e_machine, e_phentsize
+    and e_phnum, so the 56-byte program header can start
+    at e_phoff = 0x30 with p_type doubling as e_flags,
+    p_flags as e_ehsize and p_offset (= 1) as e_phnum; the
+    image is linked to start at 0x400068 and lands at file
+    offset 0x68 instead of 0x78, every byte at its link
+    address.  Metadata packing only, not compression: the
+    bytes mapped into memory are identical                    4,975
+ 7. -fno-pie: the toolchain defaults to PIE and the code
+    had been compiled position-independent (RIP-relative
+    loads and GOT-style indirections) for a static binary
+    linked at a fixed address [-224]; -fipa-pta dropped
+    [-23]; six more flags that had paid on the round-1 code
+    (-fcall-saved-rdi, -fno-move-loop-invariants,
+    --param max-cse-insns=1, -fno-ira-hoist-pressure,
+    --param max-jump-thread-duplication-stmts=0,
+    -fcall-used-r13) were worth nothing on this one
+ 8. One static post-KEX packet buffer with two receive
+    helpers (receive; receive and check the type) [-26];
+    getrandom() without its retry loop: it fills any
+    request up to 256 bytes unless a signal interrupts it,
+    and this process installs no handlers [-10]           (6-8 together:
+                                                        5,299 -> 4,975, -324)
