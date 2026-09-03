@@ -12,6 +12,14 @@
 #    field elements, run by a tiny interpreter (3 bytes per field operation)
 #  - SHA-256 constants generated at startup from 128-bit integer root
 #    extraction (GCC __int128)
+#  - -fno-pie: the toolchain defaults to PIE, and without this the code was
+#    position-independent (RIP-relative loads, GOT-style indirections) for
+#    no reason in a static binary linked at a fixed address; -fipa-pta
+#    dropped (it grew this code)
+#  - sstrip.py packs the program header into the tail of the ELF header
+#    (e_phoff = 0x30: the kernel never reads the fields it overlaps), so
+#    the image starts at file offset 0x68 instead of 0x78; tiny.ld places
+#    .rodata inside .text, so no alignment padding remains anywhere
 #  - inherited from v26..v28: -Oz + single-invocation LTO, tiny.ld,
 #    sstrip.py, bswap + unaligned wire access, in-place packet receive
 # NO libsodium, NO OpenSSL, NO libc. Pure -nostdlib -ffreestanding -static.
@@ -27,8 +35,8 @@ CFLAGS = -Wall -Wextra -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fmerge-all-constants -fno-ident -finline-small-functions \
          -fshort-enums -fomit-frame-pointer -ffast-math -fno-math-errno \
          -fvisibility=hidden -Wno-unused-result -fno-plt \
-         -fipa-pta -fno-common -fcf-protection=none \
-         -fno-inline-functions-called-once \
+         -fno-common -fcf-protection=none \
+         -fno-inline-functions-called-once -fno-pie \
          -nostdlib -ffreestanding -static -fno-stack-clash-protection \
          -DPORT=$(PORT)
 LDFLAGS = -nostdlib -static -Wl,--gc-sections -Wl,--strip-all \

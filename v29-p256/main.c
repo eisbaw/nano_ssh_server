@@ -92,6 +92,11 @@ static const char nl[] =
  * the number as a parameter serves both directions. */
 static int cfd;
 
+/* Every post-KEX packet is received into this one buffer; tmp is its
+ * payload (5 bytes in, past the length and padding-length bytes). */
+static uint8_t tmpbuf[512];
+#define tmp (tmpbuf + 5)
+
 static int xio(void *b, size_t n, long sysno) {
     uint8_t *p = b; size_t s = 0;
     while (s < n) {
@@ -205,6 +210,16 @@ static ssize_t recv_packet(uint8_t *buf, size_t max) {
     pad = buf[4];
     if (pad >= pktlen - 1) return -1;
     return (ssize_t)(pktlen - 1 - pad);
+}
+
+/* Receive the next post-KEX packet into tmpbuf. */
+static ssize_t rp(void) { return recv_packet(tmpbuf, sizeof tmpbuf); }
+
+/* Receive a packet that must be of type t; returns its payload length or
+ * -1 on any error or a type mismatch. */
+static ssize_t rexp(unsigned t) {
+    ssize_t n = rp();
+    return (n <= 0 || tmp[0] != t) ? -1 : n;
 }
 
 /* ---- KEXINIT payload ---- */
@@ -321,9 +336,8 @@ static void handle(void) {
      * starting with 04 - checked as one compare of its first six bytes
      * (little-endian 1e 00 00 00 41 04, shifted up past the two bytes of
      * x that follow). */
-    static uint8_t tmpbuf[512];
-    uint8_t *tmp = tmpbuf + 5, *kinit = tmp;
-    if (recv_packet(tmpbuf, sizeof(tmpbuf)) != 70 ||
+    uint8_t *kinit = tmp;
+    if (rp() != 70 ||
         *(u64a *)kinit << 16 != 0x04410000001e0000u) return;
     p256_smult(shared, kinit + 6);          /* K = x coordinate, at +1 */
 
@@ -374,15 +388,15 @@ static void handle(void) {
      * is received first and, being a bare type byte, sent straight back.
      * After it, each direction's sequence number (3 so far) also marks its
      * keys as in use. */
-    if (recv_packet(tmpbuf, sizeof(tmpbuf)) <= 0 || tmp[0] != MSG_NEWKEYS) return;
+    if (rexp(MSG_NEWKEYS) < 0) return;
     if (send_packet(tmp, 1)) return;
     c2s.seq = s2c.seq = 3;
 
     /* SERVICE_REQUEST -> ACCEPT: the accept message is the request with
      * its type byte changed (both carry just the service name), so the
      * received payload is sent back in place. */
-    ssize_t srl = recv_packet(tmpbuf, sizeof(tmpbuf));
-    if (srl <= 0 || tmp[0] != MSG_SERVICE_REQUEST) return;
+    ssize_t srl = rexp(MSG_SERVICE_REQUEST);
+    if (srl < 0) return;
     tmp[0] = MSG_SERVICE_ACCEPT;
     if (send_packet(tmp, srl)) return;
 
@@ -394,8 +408,8 @@ static void handle(void) {
         "\x32" "\0\0\0\x04" "user" "\0\0\0\x0e" "ssh-connection"
         "\0\0\0\x08" "password" "\0" "\0\0\0\x0b" "password123";
     for (;;) {
-        ssize_t n = recv_packet(tmpbuf, sizeof(tmpbuf));
-        if (n <= 0 || tmp[0] != MSG_USERAUTH_REQUEST) return;
+        ssize_t n = rexp(MSG_USERAUTH_REQUEST);
+        if (n < 0) return;
         if (n == sizeof(want) - 1 && !memcmp(tmp, want, n)) break;
         /* USERAUTH_FAILURE: name-list "password", partial success FALSE */
         static const uint8_t fail[] = "\x33" "\0\0\0\x08" "password" "\0";
@@ -406,8 +420,8 @@ static void handle(void) {
     if (send_packet(tmp, 1)) return;
 
     /* CHANNEL_OPEN -> CONFIRMATION */
-    ssize_t con = recv_packet(tmpbuf, sizeof(tmpbuf));
-    if (con <= 0 || tmp[0] != MSG_CHANNEL_OPEN) return;
+    ssize_t con = rexp(MSG_CHANNEL_OPEN);
+    if (con < 0) return;
     uint8_t *p = tmp + 1, *end = tmp + con;
     uint32_t ctl;
     if (!rd_field(&p, end, &ctl)) return;              /* channel type (skipped) */
@@ -421,7 +435,7 @@ static void handle(void) {
     /* channel requests until shell/exec */
     int ready = 0;
     while (!ready) {
-        ssize_t n = recv_packet(tmpbuf, sizeof(tmpbuf));
+        ssize_t n = rp();
         if (n <= 0) return;
         if (tmp[0] != MSG_CHANNEL_REQUEST) break;
         uint8_t *q = tmp + 1, *qend = tmp + n, *rt;
@@ -442,7 +456,7 @@ static void handle(void) {
     /* EOF + CLOSE */
     send_chan(MSG_CHANNEL_EOF, cchan, 0, 0);
     send_chan(MSG_CHANNEL_CLOSE, cchan, 0, 0);
-    recv_packet(tmpbuf, sizeof(tmpbuf));
+    rp();
 }
 
 /* used/externally_visible: nothing in C calls main() - _start reaches it
