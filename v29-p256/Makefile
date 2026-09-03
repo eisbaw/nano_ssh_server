@@ -15,7 +15,11 @@
 #  - -fno-pie: the toolchain defaults to PIE, and without this the code was
 #    position-independent (RIP-relative loads, GOT-style indirections) for
 #    no reason in a static binary linked at a fixed address; -fipa-pta
-#    dropped (it grew this code)
+#    dropped (it grew this code); six more flags found by a greedy sweep
+#    over ~180 candidates on the final code (-fno-move-loop-invariants,
+#    -mtune=nocona, -fno-caller-saves, -fcall-used-r12 - safe, nothing
+#    outside this LTO unit is called - -fno-tree-reassoc,
+#    -fno-tree-tail-merge), 55 bytes together
 #  - tiny.ld writes the 0x68-byte ELF header itself, with the program
 #    header packed into its tail (e_phoff = 0x30: the kernel never reads
 #    the fields it overlaps) and the fields the kernel never reads holding
@@ -39,6 +43,8 @@ CFLAGS = -Wall -Wextra -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fvisibility=hidden -Wno-unused-result -fno-plt \
          -fno-common -fcf-protection=none \
          -fno-inline-functions-called-once -fno-pie \
+         -fno-move-loop-invariants -mtune=nocona -fno-caller-saves \
+         -fcall-used-r12 -fno-tree-reassoc -fno-tree-tail-merge \
          -nostdlib -ffreestanding -static -fno-stack-clash-protection \
          -DPORT=$(PORT)
 LDFLAGS = -nostdlib -static -Wl,--gc-sections \
