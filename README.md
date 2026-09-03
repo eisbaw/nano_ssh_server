@@ -4,14 +4,14 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **4,173 bytes** (`v29-p256`, fully static,
+The smallest working build is **4,118 bytes** (`v29-p256`, fully static,
 zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v29-p256             # recommended/smallest: 4.1 KB, fully static
+just build v29-p256             # recommended/smallest: 4.0 KB, fully static
 just run v29-p256               # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
@@ -26,7 +26,7 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version      | Bytes   | Size   | Linkage                | Notes                                |
 |--------------|---------|--------|------------------------|--------------------------------------|
-| v29-p256     |   4,173 | 4.1 KB | static, no libc        | Recommended/smallest: P-256 key exchange and host key on one modular multiplier |
+| v29-p256     |   4,118 | 4.0 KB | static, no libc        | Recommended/smallest: P-256 key exchange and host key on one modular multiplier |
 | v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | chacha20-poly1305 on the Ed25519 field arithmetic |
 | v27-onecurve |   9,946 | 9.7 KB | static, no libc        | One Curve25519 implementation for KEX and signing |
 | v26-genk     |  12,074 |  12 KB | static, no libc        | v25-pack + generated SHA/Ed25519 constants + ELF golf |
@@ -42,10 +42,10 @@ smallest first. Run `just size-report` to regenerate.
 | v17-static2  |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
 | v0-vanilla   | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
 
-Exact byte counts vary a little with the toolchain. `v29-p256`'s 4,173,
+Exact byte counts vary a little with the toolchain. `v29-p256`'s 4,118,
 `v28-chapoly`'s 7,975, `v27-onecurve`'s 9,946 and `v26-genk`'s 12,074 were
 measured with the same gcc 13.3 / binutils 2.42, so the like-for-like
-savings are 3,802 bytes (−47.7%), 1,971 bytes (−19.8%) and 2,128 bytes
+savings are 3,857 bytes (−48.4%), 1,971 bytes (−19.8%) and 2,128 bytes
 (−17.6%). (The freestanding builds are `-nostdlib`,
 so musl-gcc and plain gcc emit identical bytes.) `v25-pack` rebuilt with that
 toolchain is 13,928 bytes. See each version's `optimization_log.txt` for the
@@ -75,7 +75,7 @@ writes the 0x68-byte ELF header itself with the program header packed into
 its tail and the fields the kernel never reads holding data the program
 uses (the ECDSA program, the version string, the listening address, the
 channel window). The cost is speed: every field multiplication is
-bit-serial, so a handshake takes ~0.6 s on a desktop against ~0.07 s for
+bit-serial, so a handshake takes ~0.7 s on a desktop against ~0.07 s for
 `v28` (and a proportionally long time on a microcontroller). See
 `v29-p256/optimization_log.txt` for the step-by-step breakdown.
 

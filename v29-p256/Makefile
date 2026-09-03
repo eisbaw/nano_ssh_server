@@ -68,7 +68,7 @@ HDRS = $(wildcard *.h)
 # linker fills in the entry point and the sizes and objcopy -O binary emits
 # the finished file: no post-processing script.  The linked ELF keeps its
 # symbols ($(TARGET).elf, for nm/objdump); the raw image is what counts.
-$(TARGET): $(SRCS) $(HDRS) tiny.ld
+$(TARGET): $(SRCS) $(HDRS) tiny.ld Makefile
 	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET).elf $(LDFLAGS)
 	objcopy -O binary $(TARGET).elf $(TARGET)
 	@echo "Built $(TARGET) (freestanding static, raw image)"

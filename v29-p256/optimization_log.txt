@@ -198,9 +198,15 @@ v28-chapoly baseline (rebuilt)                             7,975       -
     _start is one push (the ABI stack alignment) falling
     through into main; memcpy/memset/memcmp as rep
     movsb/stosb/cmpsb; exit(2) (60 fits a push imm8)          4,173     -59
+13. Six compiler flags from a greedy sweep over ~180
+    candidates on the final code, each confirmed with the
+    real client: -fno-move-loop-invariants [-25],
+    -mtune=nocona, -fno-caller-saves, -fcall-used-r12
+    (safe: nothing outside this LTO unit is called),
+    -fno-tree-reassoc, -fno-tree-tail-merge                     4,118     -55
 ------------------------------------------------------  --------  ------
-Total                                                      4,173  -3,802
-                                                                  (-47.7%)
+Total                                                      4,118  -3,857
+                                                                  (-48.4%)
 
 Verification after every step with the real OpenSSH client (9.6p1):
   sshpass -p password123 ssh -p 2222 user@localhost  ->  "Hello World"
@@ -213,7 +219,18 @@ vector, P-256 scalar multiplication and ECDSA against a Python reference,
 and the edge scalars of the ladder) and, at the baseline, by an
 independent differential fuzz of fp.c/p256.c against big-integer
 arithmetic (320,800 field cases, 700+ curve cases, 354 Poly1305 cases, no
-mismatch), a protocol review and a live malformed-input fuzz.
+mismatch), a protocol review and a live malformed-input fuzz.  The final
+code (steps 9-13 restructured the arithmetic's call structure and the
+error handling) was fuzzed again: 6,291 differential cases (add/sub/mul/
+inv under p and n on edge and random values, 120 scalar multiplications
+on random points with scalars from [2^224, n), 60 signatures through the
+host-key program, 200 Poly1305 messages) with no mismatch, and 31 live
+malformed-input cases (banners without LF or over 255 bytes, packet
+lengths 0..0xffffffff, bad padding, 4 KB KEXINITs, KEX_ECDH_INIT of the
+wrong length, prefix or with off-curve or all-0xff coordinates,
+truncated and half-closed connections, 200 rapid connects, parallel idle
+connections) after each of which the same process still served a normal
+login.
 
 Rejected / no-effect experiments (all measured):
 - _start as the C entry point (force_align_arg_pointer): +40.
@@ -248,7 +265,7 @@ Rejected / no-effect experiments (all measured):
 Cost of the changes, honestly stated:
 - Speed.  Every field operation runs on the bit-serial generic multiplier
   (~250 K instructions per P-256 multiplication) and the projective ladder
-  needs 22 of them per scalar bit: a handshake takes ~0.6 s of server CPU
+  needs 22 of them per scalar bit: a handshake takes ~0.7 s of server CPU
   on this machine against ~0.07 s for v28-chapoly, and startup (one scalar
   multiplication for the host key) ~0.2 s.  On a microcontroller this
   scales accordingly; the trade only makes sense because the target is
