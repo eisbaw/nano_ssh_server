@@ -36,14 +36,15 @@ void fp_addsub(uint8_t *d, const uint8_t *s1, const uint8_t *s2, int neg)
  * The addend is chosen with a cmov, so nothing depends on the bit.  The sum
  * is read through acc, which points at fp_zero until the first step has
  * written r, so r needs no clearing; i runs from -256 so the loop test is
- * a plain inc/jne and the byte index is (i >> 3) + 32. */
+ * a plain inc/jne and the byte index (i >> 3) + 32 is (i >> 3) & 31, which
+ * needs no sign extension. */
 void fp_mul(uint8_t *r, const uint8_t *a, const uint8_t *b)
 {
 	const uint8_t *acc = fp_zero;
-	long i;
+	int i;
 
 	for (i = -256; i; i++) {
-		const uint8_t *s = (b[FP_SIZE + (i >> 3)] << (i & 7)) & 0x80 ?
+		const uint8_t *s = (b[(i >> 3) & 31] << (i & 7)) & 0x80 ?
 				   a : fp_zero;
 
 		fp_add(r, acc, acc);
@@ -53,24 +54,27 @@ void fp_mul(uint8_t *r, const uint8_t *a, const uint8_t *b)
 }
 
 /* Fermat: x^(m-2) by square-and-multiply over the bits of m - 2, which is
- * m with its last byte lowered by 2 (the low byte is >= 2 for p and n).
- * sq is the square of the result so far and points at fp_one before the
- * first step, so the result needs no initialisation; a clear bit
- * multiplies by one instead of skipping, so the loop has no branch. */
+ * m with its last byte lowered by 2 (the low byte is >= 2 for p and n), so
+ * the exponent is read from the modulus itself and the 2 taken off the
+ * byte while it is in a register.  sq is the square of the result so far
+ * and points at fp_one before the first step, so the result needs no
+ * initialisation; a clear bit multiplies by one instead of skipping, so
+ * the loop has no data-dependent branch. */
 /* noinline: its one caller is the p256.c interpreter loop, which would
  * otherwise spill its decoded operands around the inlined body */
 __attribute__((noinline))
 void fp_inv(uint8_t *r, const uint8_t *x)
 {
-	uint8_t e[FP_SIZE], t[FP_SIZE];
+	static uint8_t t[FP_SIZE];	/* static: no frame, no rsp copies */
 	const uint8_t *sq = fp_one;
-	long i;
+	int i;
 
-	memcpy(e, fp_m, FP_SIZE);
-	e[FP_SIZE - 1] -= 2;
 	for (i = -256; i; i++) {
-		fp_mul(r, sq, (e[FP_SIZE + (i >> 3)] << (i & 7)) & 0x80 ?
-			      x : fp_one);
+		unsigned e = fp_m[FP_SIZE + (i >> 3)];
+
+		if ((i >> 3) == -1)	/* the last byte */
+			e -= 2;
+		fp_mul(r, sq, (e << (i & 7)) & 0x80 ? x : fp_one);
 		fp_mul(t, r, r);
 		sq = t;
 	}

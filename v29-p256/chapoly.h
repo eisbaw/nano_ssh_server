@@ -31,7 +31,9 @@ static void chacha_xor(const uint8_t *key, uint32_t seq, uint32_t ctr,
 	uint32_t st[16], x[16];
 	int i;
 
-	memcpy(st, "expand 32-byte k", 16);
+	/* "expand 32-byte k" as two immediates: no rodata, no call */
+	*(u64a *)st = 0x3320646e61707865;
+	*(u64a *)(st + 2) = 0x6b20657479622d32;
 	memcpy(st + 4, key, 32);
 	st[12] = ctr;
 	st[13] = 0;
@@ -46,8 +48,8 @@ static void chacha_xor(const uint8_t *key, uint32_t seq, uint32_t ctr,
 		 * four diagonal ones (s = 1); the operand indices follow from
 		 * the column a and the diagonal shift s. */
 		for (i = 0; i < 80; i++) {
-			int a = i & 3, s = (i >> 2) & 1;
-			int b = 4 + ((a + s) & 3), c = 8 + ((a + 2 * s) & 3),
+			unsigned a = i & 3, s = (i >> 2) & 1;
+			unsigned b = 4 + ((a + s) & 3), c = 8 + ((a + 2 * s) & 3),
 			    d = 12 + ((a + 3 * s) & 3);
 
 			x[a] += x[b]; x[d] = ROTL32(x[d] ^ x[a], 16);
@@ -55,10 +57,12 @@ static void chacha_xor(const uint8_t *key, uint32_t seq, uint32_t ctr,
 			x[a] += x[b]; x[d] = ROTL32(x[d] ^ x[a], 8);
 			x[c] += x[d]; x[b] = ROTL32(x[b] ^ x[c], 7);
 		}
-		for (i = 0; i < 16; i++)
-			x[i] += st[i];
-		for (i = 0; (size_t)i < n; i++)
-			buf[i] ^= ((uint8_t *)x)[i];
+		/* keystream word = x + st, XORed in a word at a time: every
+		 * length here is a multiple of 4 (4, 32, and packet lengths,
+		 * which are 4 mod 8).  A malformed received length would only
+		 * XOR up to 3 bytes into the already verified tag behind it. */
+		for (i = 0; (size_t)i < n; i += 4)
+			*(u32a *)(buf + i) ^= x[i / 4] + st[i / 4];
 		buf += n;
 		len -= n;
 		st[12]++;
@@ -71,7 +75,8 @@ static void poly1305(uint8_t *tag, const uint8_t *key,
                      const uint8_t *m, size_t len)
 {
 	static uint8_t p[FP_SIZE];	/* static: fp_m points at it */
-	uint8_t r[FP_SIZE], h[FP_SIZE], t[FP_SIZE];
+	static uint8_t t[FP_SIZE];	/* static: keeps the frame under 128 */
+	uint8_t r[FP_SIZE], h[FP_SIZE];
 	unsigned c = 0;
 	int i;
 

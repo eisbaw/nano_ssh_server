@@ -40,10 +40,10 @@ const uint8_t BYTES p256_g[64] = {
  * according to the scalar bit.  Two more programs on the same file
  * convert to affine and compute the ECDSA signature.
  *
- * Slots: 0-1 P (x,y)  2-4 R (X,Y,Z)  5-9 scratch  10-12 S  13-15 the
- * scalar k, the ECDSA secret d and hash z (p256.h), which no program
- * writes.  The S slots are scratch too until they are written, near the
- * end of the addition.
+ * Slots: 0-1 P (x,y)  2-4 R (X,Y,Z)  5-8 scratch  9 the ladder scalar
+ * (p256_smult())  10-12 S  13-15 the scalar k, the ECDSA secret d and
+ * hash z (p256.h), which no program writes.  The S slots are scratch too
+ * until they are written, near the end of the addition.
  * Instruction: { dst << 4 | src1, op << 6 | N | src2 }, op 0 = add, 1 =
  * sub (the op is fp_addsub()'s neg flag), 2 = mul, 3 = inv of src1 - the
  * sign bit says multiplier; N (0x20) is the offset of n behind p in
@@ -60,11 +60,13 @@ const uint8_t BYTES p256_g[64] = {
 #define N 0x20
 #define OP_END 0xf0
 
-enum { X2, Y2, X1, Y1, Z1, T0, T1, T2, T3, T4, SX, SY, SZ, D, K, Z,
+enum { X2, Y2, X1, Y1, Z1, T0, T1, T2, T3, KN, SX, SY, SZ, D, K, Z,
        NSLOTS };
 
 uint8_t p256_w[NSLOTS][FP_SIZE];		/* the element file (bss) */
 #define w  p256_w
+#define run p256_run
+#define p256_affine (p256_hostkey + 2)
 #define wb ((uint8_t *)w)
 
 static const uint8_t BYTES p256_step[] = {
@@ -79,7 +81,7 @@ static const uint8_t BYTES p256_step[] = {
 	OP_MUL(T1, T3, T3),		/* ss                               */
 	OP_MUL(Z1, T3, T1),		/* Z3 = s^3                         */
 	OP_MUL(T1, Y1, T3),		/* R = Ys                           */
-	OP_MUL(T4, T1, T1),		/* RR                               */
+	OP_MUL(SZ, T1, T1),		/* RR                               */
 	OP_MUL(T0, X1, T1),
 	OP_ADD(T0, T0, T0),		/* B = 2XR (a multiply costs no
 					   more than an add here, so not
@@ -90,8 +92,8 @@ static const uint8_t BYTES p256_step[] = {
 	OP_MUL(X1, T1, T3),		/* X3 = hs                          */
 	OP_SUB(T0, T0, T1),
 	OP_MUL(T1, T2, T0),
-	OP_ADD(T4, T4, T4),
-	OP_SUB(Y1, T1, T4),		/* Y3 = w(B-h) - 2R^2               */
+	OP_ADD(SZ, SZ, SZ),
+	OP_SUB(Y1, T1, SZ),		/* Y3 = w(B-h) - 2R^2               */
 	/* S = R + P */
 	OP_MUL(T0, Y2, Z1),
 	OP_SUB(T0, T0, Y1),		/* u = y2 Z1 - Y1                   */
@@ -99,26 +101,31 @@ static const uint8_t BYTES p256_step[] = {
 	OP_MUL(T2, X2, Z1),
 	OP_SUB(T2, T2, X1),		/* v = x2 Z1 - X1                   */
 	OP_MUL(T3, T2, T2),		/* vv                               */
-	OP_MUL(T4, T2, T3),		/* vvv                              */
+	OP_MUL(SX, T2, T3),		/* vvv                              */
 	OP_MUL(SY, T3, X1),		/* R = v^2 X1                       */
 	OP_MUL(T3, T1, Z1),
-	OP_SUB(T3, T3, T4),
+	OP_SUB(T3, T3, SX),
 	OP_SUB(T3, T3, SY),
 	OP_SUB(T3, T3, SY),		/* A = u^2 Z1 - v^3 - 2R            */
+	OP_MUL(SZ, SX, Z1),		/* Z3 = v^3 Z1                      */
+	OP_MUL(T1, SX, Y1),		/* v^3 Y1                           */
 	OP_MUL(SX, T2, T3),		/* X3 = vA                          */
 	OP_SUB(SY, SY, T3),		/* R - A                            */
-	OP_MUL(T1, T0, SY),		/* u(R - A)                         */
-	OP_MUL(SY, T4, Y1),
-	OP_SUB(SY, T1, SY),		/* Y3 = u(R-A) - v^3 Y1             */
-	OP_MUL(SZ, T4, Z1),		/* Z3 = v^3 Z1                      */
+	OP_MUL(T2, T0, SY),		/* u(R - A)                         */
+	OP_SUB(SY, T2, T1),		/* Y3 = u(R-A) - v^3 Y1             */
 	OP_END
 };
 
 /* affine: x = X/Z, y = Y/Z into the P slots, which hold [k]P from then
  * on; the inverse goes to a dead scratch slot.  Z - Z is p, which
  * fp_addsub() reduces to 0: the Z slot is left all zero (as .bss starts)
- * for the next multiplication, which only has to set its low byte. */
-static const uint8_t BYTES p256_affine[] = {
+ * for the next multiplication, which only has to set its low byte.
+ * The instruction in front is main()'s: it moves the host secret from
+ * the scalar slot to d (k + 0 mod n, the Z slot being zero then) before
+ * the first multiplication, and the conversion that follows it runs on
+ * the zero file, harmlessly; p256_smult() enters behind it. */
+const uint8_t BYTES p256_hostkey[] = {
+	OP_ADD(D, K, Z1 | N),
 	OP_INV(T0, Z1, 0),
 	OP_MUL(X2, X1, T0),
 	OP_MUL(Y2, Y1, T0),
@@ -134,6 +141,8 @@ static const uint8_t BYTES p256_affine[] = {
  * fp_addsub() leaves z + r d below 2^256 and congruent mod n, which is
  * all the final multiply needs.
  */
+/* .hdr.ecdsa: tiny.ld stores these 11 bytes inside the ELF header */
+__attribute__((section(".hdr.ecdsa")))
 static const uint8_t BYTES p256_ecdsa[] = {
 	OP_MUL(T1, D, X2 | N),		/* r d                              */
 	OP_ADD(T1, T1, Z | N),		/* z + r d                          */
@@ -144,22 +153,23 @@ static const uint8_t BYTES p256_ecdsa[] = {
 };
 
 /* Run the program at ip on the element file. */
-static void run(const uint8_t *ip)
+void p256_run(const uint8_t *ip)
 {
 	for (; *ip < OP_END; ip += 2) {
 		/* dst << 4 is already in place: one shift more scales it to
 		 * a 32-byte slot offset */
+		const unsigned b = ip[1];
 		uint8_t *d = wb + ((ip[0] & 0xf0) << 1);
-		const uint8_t *s1 = w[ip[0] & 15], *s2 = w[ip[1] & 15];
+		const uint8_t *s1 = w[ip[0] & 15], *s2 = w[b & 15];
 
-		fp_m = p256_pn + (ip[1] & N);
-		if ((int8_t)ip[1] < 0) {
-			if (ip[1] & 0x40)
+		fp_m = p256_pn + (b & N);
+		if ((int8_t)b < 0) {
+			if (b & 0x40)
 				fp_inv(d, s1);
 			else
 				fp_mul(d, s1, s2);
 		} else	/* fp_addsub's neg is 0 (add) or -1 (sub) */
-			fp_addsub(d, s1, s2, -(ip[1] >> 6));
+			fp_addsub(d, s1, s2, -(int)(b >> 6));
 	}
 }
 
@@ -176,46 +186,44 @@ static void run(const uint8_t *ip)
  * clear, so the failed sum is discarded.  The ladder is exception-free.
  * Adding n instead of clamping keeps the scalar itself free of fixed bits
  * (see rand_scalar() in main.c).  K is formed with the modular adder under
- * a zero modulus, which makes it a plain adder wrapping at 2^256.
+ * a zero modulus, which makes it a plain adder wrapping at 2^256, in the
+ * one slot the step program leaves alone.
  */
-void p256_smult(uint8_t *out, const uint8_t *P)
+void p256_smult(const uint8_t *P)
 {
-	uint8_t k[FP_SIZE];
-	uint8_t b = 0;
 	int i;
 
 	fp_m = fp_zero;
-	fp_add(k, w[K], p256_n);
+	fp_add(w[KN], w[K], p256_n);
 
-	/* P, R = P are the first four slots: P twice; Z = 1 is zero but
-	 * for its low byte (see p256_affine) */
-	for (i = 0; i < X1 * FP_SIZE + 64; i++)
-		wb[i] = P[i & 63];
-	w[Z1][FP_SIZE - 1] = 1;
+	/* P, R = P are the first four slots: P twice (i counts up to 0, so
+	 * the loop ends on the flags of the inc); Z = 1 is zero but for its
+	 * low byte (see p256_affine), which an inc sets a byte shorter than
+	 * a store */
+	for (i = -(X1 * FP_SIZE + 64); i; i++)
+		wb[X1 * FP_SIZE + 64 + i] = P[i & 63];
+	w[Z1][FP_SIZE - 1]++;
 
-	/* bits 255..0; the byte-sized counter ends the loop by wrapping */
-	do {
-		/* bit b of K, big-endian, spread to a byte: shift it up to
-		 * the sign and let an arithmetic shift smear it down */
-		const uint8_t mask = (int8_t)(k[b >> 3] << (b & 7)) >> 7;
-		unsigned j;
+	/* bits 255..0; i counts from -256 so the loop test is a plain
+	 * inc/jne and the byte index (i >> 3) + 32 is i >> 3 in the slot
+	 * after KN, a negative index that needs no add */
+	for (i = -256; i; i++) {
+		/* R = bit ? S : R as a copy over R whose source a cmov picks
+		 * (as fp_mul() picks its addend): S, or R itself for a clear
+		 * bit.  The three coordinates are contiguous. */
+		const uint8_t *s = (w[KN + 1][i >> 3] << (i & 7)) & 0x80 ?
+				   w[SX] : w[X1];
 
 		run(p256_step);
-		/* R = bit ? S : R; the three coordinates are contiguous */
-		for (j = 0; j < 3 * FP_SIZE; j++)
-			wb[X1 * FP_SIZE + j] ^= mask &
-				(wb[X1 * FP_SIZE + j] ^ wb[SX * FP_SIZE + j]);
-	} while (++b);
+		memcpy(w[X1], s, 3 * FP_SIZE);
+	}
 
 	run(p256_affine);
-	*out = 4;
-	memcpy(out + 1, w, 64);
 }
 
 /* r || s at p256_w[0]: [k]G, then p256_ecdsa on it (see p256.h) */
 void ecdsa_sign(void)
 {
-	/* the 65-byte wire-form copy goes to the dead S slots (10-12) */
-	p256_smult(w[SX], p256_g);
+	p256_smult(p256_g);
 	run(p256_ecdsa);
 }

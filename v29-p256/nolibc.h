@@ -45,11 +45,50 @@ static inline long __syscall6(long n, long a1, long a2, long a3,
     return ret;
 }
 #define __syscall0(n)                  __syscall6((n),0,0,0,0,0,0)
-#define __syscall1(n,a)                __syscall6((n),(long)(a),0,0,0,0,0)
-#define __syscall2(n,a,b)              __syscall6((n),(long)(a),(long)(b),0,0,0,0)
-#define __syscall3(n,a,b,c)            __syscall6((n),(long)(a),(long)(b),(long)(c),0,0,0)
 #define __syscall4(n,a,b,c,d)          __syscall6((n),(long)(a),(long)(b),(long)(c),(long)(d),0,0)
-#define __syscall5(n,a,b,c,d,e)        __syscall6((n),(long)(a),(long)(b),(long)(c),(long)(d),(long)(e),0)
+
+/* Fewer arguments: the kernel ignores the registers of arguments a call
+ * does not take, so these leave r9, r10/r8 (and rsi/rdx) alone instead of
+ * zeroing them at every call site (2-3 bytes per register). */
+static inline long __sc5(long n, long a1, long a2, long a3, long a4,
+                         long a5) {
+    long ret;
+    register long r10 __asm__("r10") = a4;
+    register long r8  __asm__("r8")  = a5;
+    __asm__ volatile ("syscall"
+                      : "=a"(ret)
+                      : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8)
+                      : "rcx", "r11", "memory");
+    return ret;
+}
+static inline long __sc3(long n, long a1, long a2, long a3) {
+    long ret;
+    __asm__ volatile ("syscall"
+                      : "=a"(ret)
+                      : "a"(n), "D"(a1), "S"(a2), "d"(a3)
+                      : "rcx", "r11", "memory");
+    return ret;
+}
+static inline long __sc2(long n, long a1, long a2) {
+    long ret;
+    __asm__ volatile ("syscall"
+                      : "=a"(ret)
+                      : "a"(n), "D"(a1), "S"(a2)
+                      : "rcx", "r11", "memory");
+    return ret;
+}
+static inline long __sc1(long n, long a1) {
+    long ret;
+    __asm__ volatile ("syscall"
+                      : "=a"(ret)
+                      : "a"(n), "D"(a1)
+                      : "rcx", "r11", "memory");
+    return ret;
+}
+#define __syscall1(n,a)                __sc1((n),(long)(a))
+#define __syscall5(n,a,b,c,d,e)        __sc5((n),(long)(a),(long)(b),(long)(c),(long)(d),(long)(e))
+#define __syscall2(n,a,b)              __sc2((n),(long)(a),(long)(b))
+#define __syscall3(n,a,b,c)            __sc3((n),(long)(a),(long)(b),(long)(c))
 
 /* x86-64 syscall numbers */
 #define SYS_read        0
@@ -60,7 +99,7 @@ static inline long __syscall6(long n, long a1, long a2, long a3,
 #define SYS_bind        49
 #define SYS_listen      50
 #define SYS_setsockopt  54
-#define SYS_exit_group  231
+#define SYS_exit        60
 #define SYS_getrandom   318
 
 /* The kernel returns -errno on failure, which is already negative, and
@@ -72,15 +111,20 @@ static inline long __syscall6(long n, long a1, long a2, long a3,
 /* ------------------------------------------------------------------ */
 /* exit                                                                */
 /* ------------------------------------------------------------------ */
-static inline void _exit_group(int code) {
-    __syscall1(SYS_exit_group, code);
+/* exit(2), not exit_group(2): the process has one thread, and 60 fits the
+ * 3-byte push imm8 / pop rax form (231 does not). */
+static inline void _exit(int code) {
+    __syscall1(SYS_exit, code);
     __builtin_unreachable();
 }
 
 /* ------------------------------------------------------------------ */
 /* File / fd I/O                                                       */
 /* ------------------------------------------------------------------ */
-static inline int close(int fd) {
+/* Descriptors are unsigned here: the kernel only looks at the low 32 bits
+ * of the register, and an unsigned value passes as a 32-bit move where an
+ * int would need a sign extension. */
+static inline int close(unsigned fd) {
     return (int)__sysret(__syscall1(SYS_close, fd));
 }
 
@@ -112,16 +156,16 @@ struct sockaddr_in {
 static inline int socket(int domain, int type, int protocol) {
     return (int)__sysret(__syscall3(SYS_socket, domain, type, protocol));
 }
-static inline int bind(int fd, const struct sockaddr *addr, socklen_t len) {
+static inline int bind(unsigned fd, const struct sockaddr *addr, socklen_t len) {
     return (int)__sysret(__syscall3(SYS_bind, fd, addr, len));
 }
-static inline int listen(int fd, int backlog) {
+static inline int listen(unsigned fd, int backlog) {
     return (int)__sysret(__syscall2(SYS_listen, fd, backlog));
 }
-static inline int accept(int fd, struct sockaddr *addr, socklen_t *len) {
+static inline int accept(unsigned fd, struct sockaddr *addr, socklen_t *len) {
     return (int)__sysret(__syscall3(SYS_accept, fd, addr, len));
 }
-static inline int setsockopt(int fd, int level, int optname,
+static inline int setsockopt(unsigned fd, int level, int optname,
                              const void *optval, socklen_t optlen) {
     return (int)__sysret(__syscall5(SYS_setsockopt, fd, level, optname,
                                     optval, optlen));

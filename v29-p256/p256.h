@@ -39,10 +39,16 @@ extern uint8_t p256_w[16][32];
 
 /* out = [P256_K]P in wire form, 0x04 || x || y (65 bytes: a copy of
  * p256_w[0..1], where the affine point is computed, behind the prefix). */
-void p256_smult(uint8_t *out, const uint8_t *P);
+void p256_smult(const uint8_t *P);
 
 /* ECDSA over P256_Z with secret P256_D and nonce P256_K:
  * r || s, two 32-byte big-endian integers, at p256_w[0]. */
 void ecdsa_sign(void);
+
+/* Run a program of the p256.c interpreter.  p256_hostkey is the one
+ * main() runs, once, after drawing the host key into P256_K: its first
+ * instruction copies it to P256_D (see p256.c for the rest of it). */
+void p256_run(const uint8_t *ip);
+extern const uint8_t p256_hostkey[];
 
 #endif /* P256_H */

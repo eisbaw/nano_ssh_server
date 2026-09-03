@@ -84,56 +84,51 @@ static void sha256_transform(uint32_t *state, const uint8_t *p) {
     for (int i = 16; i < 64; i++)
         m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
 
-    /* Working variables a..h as one array: the per-round rotation
-     * h=g, g=f, ... b=a is a shift of the array instead of seven moves. */
-    uint32_t s[8];
-    memcpy(s, state, sizeof(s));
-    for (int i = 0; i < 64; i++) {
+    /* Working variables a..h as a window sliding down an array: the
+     * per-round rotation h=g, g=f, ... b=a is the window moving one word
+     * down, so a round only writes the new a and adds t1 into d (the new
+     * e); after 64 rounds the window is v[0..7]. */
+    uint32_t v[72], *s = v + 64;
+    memcpy(s, state, 32);
+    for (int i = 0; i < 64; i++, s--) {
         t1 = s[7] + EP1(s[4]) + CH(s[4], s[5], s[6]) + sha256_k[i] + m[i];
         t2 = EP0(s[0]) + MAJ(s[0], s[1], s[2]);
-        for (int j = 7; j > 0; j--) s[j] = s[j - 1];
-        s[4] += t1;
-        s[0] = t1 + t2;
+        s[3] += t1;
+        s[-1] = t1 + t2;
     }
-    for (int i = 0; i < 8; i++) state[i] += s[i];
+    for (int i = 0; i < 8; i++) state[i] += v[i];
 }
 
-/* One-shot hash of a contiguous message: every input this server hashes
- * is assembled in a buffer first, so there is no streaming context, no
- * partial-block buffering and no separate final step - just the full
- * blocks, then one or two padded tail blocks built by a single loop. */
-static void sha256(uint8_t *out, const uint8_t *m, size_t len) {
+/* One-shot hash of a contiguous message, padded IN PLACE: every input
+ * this server hashes is assembled in a buffer first, with at least 72
+ * bytes free behind it (the padding is 9..72 bytes), so there is no
+ * streaming context, no partial-block copy and no separate final step -
+ * 0x80, zeros to 56 mod 64 and the 64-bit bit length are written after
+ * the message and the whole thing is run through the transform.  The
+ * output may overlap the padding (the exchange hash is written where its
+ * own padding was). */
+static void sha256(uint8_t *out, uint8_t *m, size_t len) {
     uint32_t st[8];
-    uint8_t blk[SHA256_BLOCK_SIZE];
     size_t i, n = len;
 
     memcpy(st, sha256_h0, sizeof(st));
-    while (n >= SHA256_BLOCK_SIZE) {
+    m[n] = 0x80;
+    do m[++n] = 0;      /* the last zero lands in the length's slot */
+    while (n % SHA256_BLOCK_SIZE != 56);
+    *(u64a *)(m + n) = __builtin_bswap64((uint64_t)len << 3);
+    for (const uint8_t *end = m + n + 8; m < end; m += SHA256_BLOCK_SIZE)
         sha256_transform(st, m);
-        m += SHA256_BLOCK_SIZE;
-        n -= SHA256_BLOCK_SIZE;
-    }
-    /* tail: the last n < 64 bytes, 0x80, zeros, then the 64-bit bit length
-     * at the end of the block - or of a second block if n > 55 */
-    for (i = 0; i < SHA256_BLOCK_SIZE; i++)
-        blk[i] = i < n ? m[i] : i == n ? 0x80 : 0;
-    if (n > 55) {
-        sha256_transform(st, blk);
-        memset(blk, 0, SHA256_BLOCK_SIZE);
-    }
-    *(u64a *)(blk + 56) = __builtin_bswap64((uint64_t)len << 3);
-    sha256_transform(st, blk);
 
     for (i = 0; i < 8; i++)
         *(u32a *)(out + i * 4) = __builtin_bswap32(st[i]);
 }
 
-/* Constant-time comparison: zero iff the two n-byte values are equal. */
+/* Constant-time comparison of two 16-byte values (the Poly1305 tag): zero
+ * iff equal, as the OR of two 64-bit XORs - no loop, no early exit. */
 static inline int ct_diff(const uint8_t *x, const uint8_t *y, size_t n) {
-    uint8_t d = 0;
-    for (size_t i = 0; i < n; i++)
-        d |= x[i] ^ y[i];
-    return d;
+    (void)n;
+    return (*(const u64a *)x ^ *(const u64a *)y) |
+           (*(const u64a *)(x + 8) ^ *(const u64a *)(y + 8)) ? 1 : 0;
 }
 
 #endif /* SHA256_H */

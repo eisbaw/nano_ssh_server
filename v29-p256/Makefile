@@ -16,10 +16,12 @@
 #    position-independent (RIP-relative loads, GOT-style indirections) for
 #    no reason in a static binary linked at a fixed address; -fipa-pta
 #    dropped (it grew this code)
-#  - sstrip.py packs the program header into the tail of the ELF header
-#    (e_phoff = 0x30: the kernel never reads the fields it overlaps), so
-#    the image starts at file offset 0x68 instead of 0x78; tiny.ld places
-#    .rodata inside .text, so no alignment padding remains anywhere
+#  - tiny.ld writes the 0x68-byte ELF header itself, with the program
+#    header packed into its tail (e_phoff = 0x30: the kernel never reads
+#    the fields it overlaps) and the fields the kernel never reads holding
+#    data the program does use (the ECDSA program, the version string, the
+#    listening address, the channel window); .rodata sits inside .text, so
+#    no alignment padding remains anywhere
 #  - inherited from v26..v28: -Oz + single-invocation LTO, tiny.ld,
 #    sstrip.py, bswap + unaligned wire access, in-place packet receive
 # NO libsodium, NO OpenSSL, NO libc. Pure -nostdlib -ffreestanding -static.
@@ -39,9 +41,9 @@ CFLAGS = -Wall -Wextra -std=c11 -Oz -flto -ffunction-sections -fdata-sections \
          -fno-inline-functions-called-once -fno-pie \
          -nostdlib -ffreestanding -static -fno-stack-clash-protection \
          -DPORT=$(PORT)
-LDFLAGS = -nostdlib -static -Wl,--gc-sections -Wl,--strip-all \
+LDFLAGS = -nostdlib -static -Wl,--gc-sections \
           -Wl,--build-id=none -Wl,-z,norelro -Wl,--no-eh-frame-hdr \
-          -Wl,-n -Wl,-T,tiny.ld
+          -Wl,-n -Wl,-T,tiny.ld -Wl,--defsym=PORT=$(PORT)
 
 SRCS = main.c fp.c p256.c nolibc.c
 TARGET = nano_ssh_server
@@ -56,10 +58,14 @@ all: $(TARGET) verify
 # intentional single-PT_LOAD layout from tiny.ld.
 HDRS = $(wildcard *.h)
 
-$(TARGET): $(SRCS) $(HDRS) tiny.ld sstrip.py
-	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
-	python3 sstrip.py $(TARGET)
-	@echo "Built $(TARGET) (freestanding static, section headers stripped)"
+# tiny.ld writes the packed ELF header itself, as data at 0x400000, so the
+# linker fills in the entry point and the sizes and objcopy -O binary emits
+# the finished file: no post-processing script.  The linked ELF keeps its
+# symbols ($(TARGET).elf, for nm/objdump); the raw image is what counts.
+$(TARGET): $(SRCS) $(HDRS) tiny.ld
+	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET).elf $(LDFLAGS)
+	objcopy -O binary $(TARGET).elf $(TARGET)
+	@echo "Built $(TARGET) (freestanding static, raw image)"
 
 verify: $(TARGET)
 	@echo ""
@@ -75,5 +81,5 @@ verify: $(TARGET)
 	@echo ""
 
 clean:
-	rm -f *.o $(TARGET)
+	rm -f *.o $(TARGET) $(TARGET).elf
 	@echo "Cleaned v29-p256"
