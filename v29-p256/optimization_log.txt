@@ -37,7 +37,7 @@ v28-chapoly baseline (rebuilt)                             7,975       -
     41-instruction program over a flat file of field
     elements run by a small interpreter; the scalar's
     top bits fixed so the ladder never meets an
-    exceptional case (replaced in step 9).  ECDSA's
+    exceptional case (replaced in step 2).  ECDSA's
     digest is SHA-256, so SHA-512 goes; its constants
     generated from 128-bit integer roots.  Deletes
     f25519.c, ed25519.c, edsign.c, x25519_ed.c, sha512.c
@@ -96,7 +96,18 @@ v28-chapoly baseline (rebuilt)                             7,975       -
       passes through one loop body, the scale 2^32 by 32
       doublings so no constant is stored; ~95 bytes of code
       against the ~250 of the 128-bit integer extraction
-      [-128]                                                  5,431    -882
+      [-128]
+    - two fixes from an independent adversarial review of
+      step 1 (four reviewers, two refuters per finding):
+      the packet-length guard, inherited from v23..v28,
+      compared in 32 bits and wrapped for lengths near
+      2^32, letting an unauthenticated client overrun a
+      stack buffer - compared as size_t now [-2]; and the
+      fixed top bits of every scalar, which made the ECDSA
+      nonce recoverable by a lattice attack - scalars are
+      drawn uniformly below n and the ladder runs on k + n
+      (or k + 2n) instead, which always has bit 256 set
+      [+85, see step 5]                                       5,431    -882
  3. .rodata placed inside the .text output section: the
     32-byte-aligned constant tables had given the .rodata
     output section a 32-byte alignment that SUBALIGN(1) did
@@ -116,6 +127,30 @@ v28-chapoly baseline (rebuilt)                             7,975       -
     top word is zero instead (one test) leaves the scalar
     uniform over [2^224, n) and the ladder exception-free
     for every scalar it can be given                            5,299     -25
+ 6. The program header packed into the tail of the ELF
+    header (sstrip.py): of the ELF header the kernel reads
+    only the magic, class, e_type, e_machine, e_phentsize
+    and e_phnum, so the 56-byte program header can start
+    at e_phoff = 0x30 with p_type doubling as e_flags,
+    p_flags as e_ehsize and p_offset (= 1) as e_phnum; the
+    image is linked to start at 0x400068 and lands at file
+    offset 0x68 instead of 0x78, every byte at its link
+    address.  Metadata packing only, not compression: the
+    bytes mapped into memory are identical                     5,275     -24
+ 7. -fno-pie: the toolchain defaults to PIE and the code
+    had been compiled position-independent (RIP-relative
+    loads and GOT-style indirections) for a static binary
+    linked at a fixed address [-224]; -fipa-pta dropped
+    [-23]; six more flags that had paid on the round-1 code
+    (-fcall-saved-rdi, -fno-move-loop-invariants,
+    --param max-cse-insns=1, -fno-ira-hoist-pressure,
+    --param max-jump-thread-duplication-stmts=0,
+    -fcall-used-r13) were worth nothing on this one             5,028    -247
+ 8. One static post-KEX packet buffer with two receive
+    helpers (receive; receive and check the type) [-26];
+    getrandom() without its retry loop: it fills any
+    request up to 256 bytes unless a signal interrupts it,
+    and this process installs no handlers [-10]                 4,975     -53
 ------------------------------------------------------  --------  ------
 Total (so far)                                             4,975  -3,000
                                                                   (-37.6%)
@@ -172,28 +207,3 @@ Cost of the changes, honestly stated:
   than [1, n); a cmov-selected pointer in fp_mul (a cache-timing channel);
   the four exceptional ladder scalars are unreachable but nothing checks r
   or s for zero (probability 2^-256).  See the README's Security section.
- 6. The program header packed into the tail of the ELF
-    header (sstrip.py): of the ELF header the kernel reads
-    only the magic, class, e_type, e_machine, e_phentsize
-    and e_phnum, so the 56-byte program header can start
-    at e_phoff = 0x30 with p_type doubling as e_flags,
-    p_flags as e_ehsize and p_offset (= 1) as e_phnum; the
-    image is linked to start at 0x400068 and lands at file
-    offset 0x68 instead of 0x78, every byte at its link
-    address.  Metadata packing only, not compression: the
-    bytes mapped into memory are identical                    4,975
- 7. -fno-pie: the toolchain defaults to PIE and the code
-    had been compiled position-independent (RIP-relative
-    loads and GOT-style indirections) for a static binary
-    linked at a fixed address [-224]; -fipa-pta dropped
-    [-23]; six more flags that had paid on the round-1 code
-    (-fcall-saved-rdi, -fno-move-loop-invariants,
-    --param max-cse-insns=1, -fno-ira-hoist-pressure,
-    --param max-jump-thread-duplication-stmts=0,
-    -fcall-used-r13) were worth nothing on this one
- 8. One static post-KEX packet buffer with two receive
-    helpers (receive; receive and check the type) [-26];
-    getrandom() without its retry loop: it fills any
-    request up to 256 bytes unless a signal interrupts it,
-    and this process installs no handlers [-10]           (6-8 together:
-                                                        5,299 -> 4,975, -324)
