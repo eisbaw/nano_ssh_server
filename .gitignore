@@ -34,3 +34,6 @@ host_key.pub
 *.log
 test_output/
 build-musl/
+
+# Claude Code workflow worktrees (harness-generated)
+.claude/worktrees/

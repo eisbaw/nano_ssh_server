@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **7,975 bytes** (`v28-chapoly`, fully static,
+The smallest working build is **4,118 bytes** (`v29-p256`, fully static,
 zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v28-chapoly          # recommended/smallest: 7.8 KB, fully static
-just run v28-chapoly            # listens on 2222
+just build v29-p256             # recommended/smallest: 4.0 KB, fully static
+just run v29-p256               # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +26,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version      | Bytes   | Size   | Linkage                | Notes                                |
 |--------------|---------|--------|------------------------|--------------------------------------|
-| v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | Recommended/smallest: chacha20-poly1305 on the Ed25519 field arithmetic |
+| v29-p256     |   4,118 | 4.0 KB | static, no libc        | Recommended/smallest: P-256 key exchange and host key on one modular multiplier |
+| v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | chacha20-poly1305 on the Ed25519 field arithmetic |
 | v27-onecurve |   9,946 | 9.7 KB | static, no libc        | One Curve25519 implementation for KEX and signing |
 | v26-genk     |  12,074 |  12 KB | static, no libc        | v25-pack + generated SHA/Ed25519 constants + ELF golf |
 | v25-pack     |  14,576 |  14 KB | static, no libc        | v23-min + computed AES S-box + packed exchange hash |
@@ -41,13 +42,42 @@ smallest first. Run `just size-report` to regenerate.
 | v17-static2  |  71,456 |  69 KB | static, musl           | v17-from14 sources, built static     |
 | v0-vanilla   | 118,496 | 115 KB | dynamic, libsodium+SSL | Baseline reference, readable code    |
 
-Exact byte counts vary a little with the toolchain. `v28-chapoly`'s 7,975,
-`v27-onecurve`'s 9,946 and `v26-genk`'s 12,074 were measured with the same
-gcc 13.3 / binutils 2.42, so the like-for-like savings are 1,971 bytes
-(−19.8%) and 2,128 bytes (−17.6%). (The freestanding builds are `-nostdlib`,
+Exact byte counts vary a little with the toolchain. `v29-p256`'s 4,118,
+`v28-chapoly`'s 7,975, `v27-onecurve`'s 9,946 and `v26-genk`'s 12,074 were
+measured with the same gcc 13.3 / binutils 2.42, so the like-for-like
+savings are 3,857 bytes (−48.4%), 1,971 bytes (−19.8%) and 2,128 bytes
+(−17.6%). (The freestanding builds are `-nostdlib`,
 so musl-gcc and plain gcc emit identical bytes.) `v25-pack` rebuilt with that
 toolchain is 13,928 bytes. See each version's `optimization_log.txt` for the
 step-by-step breakdown.
+
+`v29-p256` moves the key exchange and the host key from Curve25519/Ed25519
+to NIST P-256 (ecdh-sha2-nistp256 + ecdsa-sha2-nistp256). The point is not
+the curve but what it removes: `v28-chapoly` still needed two curves (the
+same group in Montgomery and Edwards coordinates, with a mapping and a
+square root between them), a dedicated 2^255−19 field with its own carry
+folding, and two hashes, because the Ed25519 challenge is SHA-512 while the
+rest of the handshake is SHA-256. On P-256 the key exchange and the
+signature run in one coordinate system, and ECDSA hashes with SHA-256, so the
+SHA-512 core, the Curve25519 field code, the square root and the curve
+mapping all go. What is left of the public-key crypto is one generic
+shift-and-add modular multiplier (`fp.c`, big-endian, any 256-bit modulus,
+so every wire value is used in place) and one short-Weierstrass
+double-and-add step written as a 41-instruction program over a flat file of
+field elements; the same multiplier does the group-order arithmetic of
+ECDSA and, as in `v28`, Poly1305. The SHA-256 constants are generated at
+startup in double precision (the cube root as the fixed point of
+x = sqrt(q/x)), every hash is taken in one shot over an assembled buffer
+and padded in place, the KEX reply is built in place, a failed read or a
+malformed packet abandons the connection by re-entering the accept loop on
+a private stack (so no I/O call returns a result), and the linker script
+writes the 0x68-byte ELF header itself with the program header packed into
+its tail and the fields the kernel never reads holding data the program
+uses (the ECDSA program, the version string, the listening address, the
+channel window). The cost is speed: every field multiplication is
+bit-serial, so a handshake takes ~0.7 s on a desktop against ~0.07 s for
+`v28` (and a proportionally long time on a microcontroller). See
+`v29-p256/optimization_log.txt` for the step-by-step breakdown.
 
 `v28-chapoly` changes the packet cipher from aes128-ctr + hmac-sha2-256 to
 chacha20-poly1305@openssh.com. The point is not ChaCha20 itself but Poly1305:
@@ -102,8 +132,8 @@ on-disk file while leaving the runtime RAM footprint unchanged.
 | Feature        | Implementation                          |
 |----------------|-----------------------------------------|
 | Protocol       | SSH-2.0                                 |
-| Key exchange   | Curve25519                              |
-| Host key       | Ed25519                                 |
+| Key exchange   | Curve25519; NIST P-256 (`v29-p256`)     |
+| Host key       | Ed25519; ECDSA P-256 (`v29-p256`)       |
 | Cipher         | AES-128-CTR (vanilla) or ChaCha20-Poly1305 |
 | MAC            | HMAC-SHA256                             |
 | Authentication | Password (hardcoded `user`/`password123`)|
@@ -133,6 +163,19 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   normalization, scalar reduction and field inverse are likewise re-expressed
   on routines already present, and the wire code uses `bswap` + unaligned
   access, whole-message userauth matching and in-place packet receive
+- One curve, one multiplier, one hash (`v29-p256`): NIST P-256 for both the
+  key exchange and the signature, so the whole handshake runs on one generic
+  shift-and-add modular multiplier (three moduli: the field prime, the group
+  order, Poly1305's 2^130−5) and needs no SHA-512; the double-and-add step,
+  the affine conversion and ECDSA are 2-byte-per-instruction programs over a
+  flat file of field elements; SHA-256 constants from a double-precision
+  recurrence; one-shot hashing over assembled buffers; the KEX reply built in
+  place; `-fno-pie` (the code had been position-independent for nothing);
+  the ELF header written by the linker script with the program header
+  packed into its tail and program data in the fields the kernel never
+  reads (`objcopy -O binary` emits the file: no post-processing script);
+  errors abandon the connection by re-entering the accept loop on a
+  private stack instead of returning through every caller
 - One curve implementation (`v27-onecurve`): X25519 runs on the Edwards group
   law linked for Ed25519, so the Montgomery ladder disappears; the field
   inverse is `exp2523(x)^8 · x^3` so one exponentiation chain serves both the
@@ -179,7 +222,10 @@ nano_ssh_server/
 ├── v23-scratch/       smallest dynamic: from-scratch 378-line main
 ├── v23-min/           scratch main + freestanding, no libc
 ├── v25-pack/          v23-min + computed S-box + packed hash
-├── v26-genk/          recommended/smallest: v25-pack + generated constants + ELF golf
+├── v26-genk/          v25-pack + generated constants + ELF golf
+├── v27-onecurve/      one Curve25519 implementation for KEX and signing
+├── v28-chapoly/       chacha20-poly1305 on the Ed25519 field arithmetic
+├── v29-p256/          recommended/smallest: P-256 on one modular multiplier
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -193,11 +239,11 @@ nano_ssh_server/
 
 ## Status
 
-Fourteen production versions are validated end-to-end against a real OpenSSH
+Fifteen production versions are validated end-to-end against a real OpenSSH
 client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
 `v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
 `v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`,
-`v28-chapoly`.
+`v28-chapoly`, `v29-p256`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -229,6 +275,32 @@ rejected outright. `v28-chapoly` also offers only chacha20-poly1305@openssh.com
 with empty MAC name-lists (valid for an AEAD cipher; OpenSSH accepts it, a
 stricter client may not) and accepts the userauth request only in the exact
 form OpenSSH sends it.
+`v29-p256` has its own set of trade-offs, and one property that is *stronger*
+than its predecessors: an independent review of the version found that the
+packet-length guard shared by every version since `v23-scratch` (`pktlen + 20 >
+max` evaluated in 32 bits) wraps for lengths near 2^32 and lets an
+unauthenticated client overrun a stack buffer; `v29-p256` compares in 64 bits
+(the older versions are kept as they were, as documented size steps, and are
+not to be exposed to a network either). What it does not do:
+- The peer's P-256 point is used without a range or on-curve check. An
+  invalid point yields a wrong shared secret and the handshake fails at the
+  first MAC; the arithmetic has no data-dependent memory access or loop
+  bound, so nothing worse happens, and the scalar it meets is ephemeral.
+- Scalars (host key, ephemeral key, ECDSA nonce) are drawn uniformly over
+  [2^224, n) — one part in 2^32 short of uniform over [1, n), with no fixed
+  bits. The review caught an earlier draft that clamped the top two bits of
+  every nonce, a textbook lattice-attack weakness; the ladder now takes
+  `k + n` instead, which is why the lower bound exists.
+- The modular reduction, the ladder's conditional move and the Poly1305 tag
+  check are branch-free, but `fp_mul` selects its addend by a `cmov` on a
+  *pointer*, so the address of the following load depends on a secret bit
+  (a cache-timing channel), and every field operation is bit-serial.
+- No `exit-status` is sent (the client reports 255 after printing "Hello
+  World"), the client's `first_kex_packet_follows` guess and any `IGNORE` /
+  `DEBUG` messages during the handshake are not handled, and the two
+  post-NEWKEYS sequence numbers are constants — none of which OpenSSH
+  exercises.
+
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.
 

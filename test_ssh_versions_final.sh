@@ -29,7 +29,8 @@ VERSIONS=(
     "v25-pack:v23-min + computed AES S-box + packed hash"
     "v26-genk:v25-pack + generated constants + ELF golf"
     "v27-onecurve:One Curve25519 implementation for KEX and signing"
-    "v28-chapoly:Smallest overall: chacha20-poly1305 on the Ed25519 field arithmetic"
+    "v28-chapoly:chacha20-poly1305 on the Ed25519 field arithmetic"
+    "v29-p256:Smallest overall: P-256 key exchange and host key on one modular multiplier"
 )
 
 # Stats
