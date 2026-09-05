@@ -30,7 +30,8 @@ VERSIONS=(
     "v26-genk:v25-pack + generated constants + ELF golf"
     "v27-onecurve:One Curve25519 implementation for KEX and signing"
     "v28-chapoly:chacha20-poly1305 on the Ed25519 field arithmetic"
-    "v29-p256:Smallest overall: P-256 key exchange and host key on one modular multiplier"
+    "v29-p256:P-256 key exchange and host key on one modular multiplier"
+    "v30-chacha:Smallest overall: shared ChaCha20 add/XOR/rotate step"
 )
 
 # Stats

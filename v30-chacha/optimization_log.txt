@@ -1,0 +1,74 @@
+v30-chacha optimization log
+==========================
+Baseline: v29-p256 at main commit 11ced3652ba0ffc69841509f80cd82faae60efbc.
+Both versions built locally with GCC 13.3.0, binutils 2.42, x86-64 Ubuntu
+24.04, using the same compiler/linker flags. No compression or ELF layout
+changes. v29-p256 is preserved as an independent, reproducible size step.
+
+Step                                                   Size (B)   Delta
+-----------------------------------------------------  --------  ------
+v29-p256 baseline                                         4,118       -
+1. Pack the eight quarter-round operand sets into
+   16 bytes (four nibbles per a,b,c,d tuple), and share
+   one add/XOR/rotate body across its four steps.
+   Swapping the operand word's bytes exchanges a/c and
+   b/d; a shifting rotation word supplies 16,12,8,7.       4,105     -13
+2. Count the 80 quarter-rounds from -80 to zero,
+   ending on the increment's flags.                       4,103      -2
+3. Index the keystream by unsigned words instead of
+   signed byte offsets divided by four.                   4,095      -8
+-----------------------------------------------------  --------  ------
+Total                                                     4,095     -23
+                                                                 (-0.56%)
+
+The executable is one byte below 4 KiB. The savings are in loaded code/data,
+not a removed feature: all 20 ChaCha20 rounds remain. P-256, SHA-256,
+Poly1305, key derivation, packet parsing, credentials, and the packed ELF
+header are unchanged. The new version is self-contained and builds with
+the same dependencies and flags as v29-p256.
+
+Verification
+------------
+- tests/test_chacha.py: 365 cases per version, 730 total. A fixed all-zero
+  block vector checks the scalar Python oracle as well as the C core.
+  Seeded cases cover random keys/sequence numbers/counters, lengths 0..4092,
+  word and 64-byte block boundaries, four buffer alignments, unchanged keys,
+  and guard bytes. The original whole-word behavior for a non-word length
+  is checked explicitly, including the up-to-three tag bytes behind it.
+- tests/test_connection.sh and tests/test_auth.sh pass for both versions
+  with sshpass 1.06 and OpenSSH 9.6p1. Correct passwords print "Hello World";
+  wrong passwords are rejected. The existing SSH exit status remains 255
+  because the server does not send exit-status.
+- A separate live test ran each binary in one process: banner exchange,
+  13 successful logins including a 3.5 KB encrypted exec request, rejected
+  username/password cases, and lengths 0, 4, 4093, 0xffffffec, 0xffffffff.
+  After each malformed length the same server still completed a login.
+  Eight timed logins had medians 0.561 s (v29) and 0.558 s (v30); this is a
+  small sanity sample, not evidence of a speed improvement.
+- The Nix CI workflow builds/tests all versions, runs the independent
+  cipher checks, and includes v30-chacha in the real-client production list.
+  Local Nix was unavailable and its download was blocked, so local builds
+  used the explicitly recorded GCC/binutils pair rather than claiming a
+  Nix-shell result. The other historical versions require dependencies
+  available in CI but absent locally.
+
+Trade-off
+---------
+The shared quarter-round step executes more loop and operand-decoding
+instructions than four straight-line steps. It trades cipher throughput
+for code size; the bit-serial P-256 arithmetic remains the dominant cost
+of a login. There is no new static buffer or runtime dependency, and no
+additional cryptographic or protocol restriction.
+
+Measured alternatives rejected
+------------------------------
+- Combining all 320 add/XOR/rotate steps into one loop: 4,120 bytes.
+- Keeping computed operand indices with the shared step: 4,116 bytes.
+- Packed operand lookup with four unrolled steps: 4,137 bytes.
+- Static ChaCha state/scratch arrays: 4,138 bytes against the 4,105-byte step.
+- Splitting add and XOR/rotate into eight serial steps: 4,099 bytes against
+  the final 4,095-byte build.
+- A rotation table instead of a shifting word: 4,105 bytes against the
+  final build. Swapping operand pointers: 4,129 bytes.
+- A small follow-up flag sweep found only one byte from removing
+  -fcall-used-r12; not taken, to keep the build flags identical to v29.

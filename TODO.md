@@ -432,6 +432,15 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ## Phase 3: Optimization Iterations
 
+### v30-chacha: Compact ChaCha20 round loop
+- [x] Reproduce the smallest existing version: v29-p256, 4,118 bytes
+- [x] Preserve v29-p256 and create an independent optimized version
+- [x] Share the add/XOR/rotate step and simplify its loop indices: 4,095 bytes
+- [x] Verify both cores against independent cipher vectors and boundary cases
+- [x] Verify correct/wrong passwords and "Hello World" with real OpenSSH
+- [x] Register v30-chacha and the cipher checks in the Nix CI workflow
+- [x] Document the size progression and unchanged protocol limitations
+
 ### v2-opt1: Compiler Optimizations
 - [ ] `P0` Copy v1-portable to v2-opt1
 - [ ] `P0` Add compiler flags:
