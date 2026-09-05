@@ -41,6 +41,10 @@ jobs:
         run: |
           nix-shell --run "just size-report"
 
+      - name: Check compact ChaCha20 core
+        run: |
+          nix-shell --run "just test-chacha"
+
       - name: Test all versions
         run: |
           nix-shell --run "just test-all"

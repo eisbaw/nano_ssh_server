@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **4,118 bytes** (`v29-p256`, fully static,
+The smallest working build is **4,095 bytes** (`v30-chacha`, fully static,
 zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v29-p256             # recommended/smallest: 4.0 KB, fully static
-just run v29-p256               # listens on 2222
+just build v30-chacha           # recommended/smallest: under 4 KiB, fully static
+just run v30-chacha             # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +26,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version      | Bytes   | Size   | Linkage                | Notes                                |
 |--------------|---------|--------|------------------------|--------------------------------------|
-| v29-p256     |   4,118 | 4.0 KB | static, no libc        | Recommended/smallest: P-256 key exchange and host key on one modular multiplier |
+| v30-chacha   |   4,095 | 4.0 KB | static, no libc        | Recommended/smallest: shared ChaCha20 add/XOR/rotate step |
+| v29-p256     |   4,118 | 4.0 KB | static, no libc        | P-256 key exchange and host key on one modular multiplier |
 | v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | chacha20-poly1305 on the Ed25519 field arithmetic |
 | v27-onecurve |   9,946 | 9.7 KB | static, no libc        | One Curve25519 implementation for KEX and signing |
 | v26-genk     |  12,074 |  12 KB | static, no libc        | v25-pack + generated SHA/Ed25519 constants + ELF golf |
@@ -50,6 +51,19 @@ savings are 3,857 bytes (−48.4%), 1,971 bytes (−19.8%) and 2,128 bytes
 so musl-gcc and plain gcc emit identical bytes.) `v25-pack` rebuilt with that
 toolchain is 13,928 bytes. See each version's `optimization_log.txt` for the
 step-by-step breakdown.
+
+`v30-chacha` retains `v29-p256`'s curve, hash, protocol and build flags. It
+packs the eight ChaCha20 quarter-round operand sets into 16 bytes and uses
+one add/XOR/rotate body with rotation counts 16, 12, 8 and 7. Swapping the
+packed operand bytes between steps exchanges a/c and b/d. An increment-to-zero
+quarter-round counter and unsigned word indexing save another ten bytes.
+The result is **4,095 bytes versus 4,118** with the same gcc 13.3 / binutils
+2.42: **23 bytes (0.56%) smaller**, with all 20 cipher rounds retained and
+no compression. The cipher core does more loop/operand-decoding work; the
+P-256 handshake still dominates connection time. `just test-chacha` checks
+both cores against a known vector and an independent Python reference,
+including unaligned buffers and partial-word/block boundaries. See
+`v30-chacha/optimization_log.txt` for the measurements.
 
 `v29-p256` moves the key exchange and the host key from Curve25519/Ed25519
 to NIST P-256 (ecdh-sha2-nistp256 + ecdsa-sha2-nistp256). The point is not
@@ -132,8 +146,8 @@ on-disk file while leaving the runtime RAM footprint unchanged.
 | Feature        | Implementation                          |
 |----------------|-----------------------------------------|
 | Protocol       | SSH-2.0                                 |
-| Key exchange   | Curve25519; NIST P-256 (`v29-p256`)     |
-| Host key       | Ed25519; ECDSA P-256 (`v29-p256`)       |
+| Key exchange   | Curve25519; NIST P-256 (`v29-p256`, `v30-chacha`) |
+| Host key       | Ed25519; ECDSA P-256 (`v29-p256`, `v30-chacha`) |
 | Cipher         | AES-128-CTR (vanilla) or ChaCha20-Poly1305 |
 | MAC            | HMAC-SHA256                             |
 | Authentication | Password (hardcoded `user`/`password123`)|
@@ -199,6 +213,7 @@ on-disk file while leaving the runtime RAM footprint unchanged.
 ```bash
 just test-all-sshpass           # runs each production version end-to-end
 just test v0-vanilla            # unit + connection tests for one version
+just test-chacha                # independent cipher vectors and boundary tests
 just size-report                # table of all built binary sizes
 just valgrind v0-vanilla        # memory leak check
 ```
@@ -225,7 +240,8 @@ nano_ssh_server/
 ├── v26-genk/          v25-pack + generated constants + ELF golf
 ├── v27-onecurve/      one Curve25519 implementation for KEX and signing
 ├── v28-chapoly/       chacha20-poly1305 on the Ed25519 field arithmetic
-├── v29-p256/          recommended/smallest: P-256 on one modular multiplier
+├── v29-p256/          P-256 on one modular multiplier
+├── v30-chacha/        recommended/smallest: shared ChaCha20 round step
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -239,11 +255,11 @@ nano_ssh_server/
 
 ## Status
 
-Fifteen production versions are validated end-to-end against a real OpenSSH
+Sixteen production versions are validated end-to-end against a real OpenSSH
 client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
 `v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
 `v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`,
-`v28-chapoly`, `v29-p256`.
+`v28-chapoly`, `v29-p256`, `v30-chacha`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -300,6 +316,9 @@ not to be exposed to a network either). What it does not do:
   `DEBUG` messages during the handshake are not handled, and the two
   post-NEWKEYS sequence numbers are constants — none of which OpenSSH
   exercises.
+
+`v30-chacha` inherits all of `v29-p256`'s security and interoperability
+limitations; its changes only restructure the ChaCha20 computation.
 
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.

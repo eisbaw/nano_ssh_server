@@ -94,6 +94,10 @@ test-all:
     if [ -n "$failed" ]; then echo "Tests failed for:$failed"; exit 1; fi; \
     echo "All version tests passed."
 
+# Compare compact ChaCha20 with independent vectors and a scalar reference
+test-chacha:
+    @python3 tests/test_chacha.py
+
 # Connect to running server with SSH client (run in separate terminal)
 connect:
     @echo "Connecting to SSH server on port 2222..."
