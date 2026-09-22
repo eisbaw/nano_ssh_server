@@ -432,6 +432,16 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ## Phase 3: Optimization Iterations
 
+### v31-trim: Trim v30-chacha further
+- [x] Preserve v30-chacha (4,095 bytes) and create an independent version
+- [x] Cut the channel phase to open confirmation, data and close (RFC 4254)
+- [x] Golf the packet layer, key exchange and crypto in measured steps: 3,426 bytes
+- [x] Sweep compiler flags, keeping only flags whose binary passes a real login
+- [x] Add a differential crypto test (SHA-256, ChaCha20, Poly1305, field, P-256, ECDSA)
+- [x] Verify correct/wrong passwords, malformed input and tampered packets with real OpenSSH
+- [x] Register v31-trim and the crypto test in the justfile and Nix CI workflow
+- [x] Document the steps, behavior changes and verification
+
 ### v30-chacha: Compact ChaCha20 round loop
 - [x] Reproduce the smallest existing version: v29-p256, 4,118 bytes
 - [x] Preserve v29-p256 and create an independent optimized version

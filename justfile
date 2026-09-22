@@ -98,6 +98,10 @@ test-all:
 test-chacha:
     @python3 tests/test_chacha.py
 
+# Compare the P-256 versions' crypto core with independent Python references
+test-crypto:
+    @python3 tests/test_crypto.py
+
 # Connect to running server with SSH client (run in separate terminal)
 connect:
     @echo "Connecting to SSH server on port 2222..."

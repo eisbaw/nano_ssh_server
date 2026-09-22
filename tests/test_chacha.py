@@ -67,10 +67,19 @@ def check(version, cc):
     with tempfile.TemporaryDirectory(prefix="nano-chacha-") as directory:
         shim = Path(directory) / "probe.c"
         library = Path(directory) / "probe.so"
+        header = (ROOT / version / "chapoly.h").read_text()
+        if "chacha_xor(uint32_t *st, uint8_t *buf" in header:
+            # v31-trim and later: the cipher runs on a per-key state whose
+            # key words the key derivation fills in (and whose words 13
+            # and 14 stay zero, as in the server's bss)
+            call = ('static uint32_t st[16]; memcpy(st + 4, k, 32); '
+                    'chacha_xor(st, b, s, c, n);')
+        else:
+            call = 'chacha_xor(k, s, c, b, n);'
         shim.write_text(
             '#include "chapoly.h"\n'
             'void probe(const uint8_t *k, uint32_t s, uint32_t c, '
-            'uint8_t *b, size_t n) { chacha_xor(k, s, c, b, n); }\n'
+            'uint8_t *b, size_t n) { ' + call + ' }\n'
         )
         subprocess.run(
             shlex.split(cc) + ["-std=c11", "-Oz", "-shared", "-fPIC",
@@ -121,7 +130,8 @@ def check(version, cc):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("versions", nargs="*", default=["v29-p256", "v30-chacha"])
+    parser.add_argument("versions", nargs="*",
+                        default=["v29-p256", "v30-chacha", "v31-trim"])
     parser.add_argument("--cc", default=os.environ.get("CC", "gcc"))
     args = parser.parse_args()
     for version in args.versions:

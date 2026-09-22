@@ -1,0 +1,208 @@
+v31-trim optimization log
+=========================
+Baseline: v30-chacha at commit 5f5fe0c01fdf7da7addfb7da3676dbe013acdb13.
+Both versions built locally with GCC 13.3.0 and binutils 2.42 (x86-64
+Ubuntu 24.04), `CC=gcc just build <version>` (musl-gcc is not installed
+here; the build is freestanding, so it emits the same bytes).  v30-chacha
+is untouched; v31-trim is a separate directory.  No executable compression:
+the 3,426 bytes are the image the kernel maps, byte for byte.
+
+Result: 4,095 -> 3,426 bytes, -669 bytes (-16.3%).
+
+Step                                                          Size (B)  Delta
+------------------------------------------------------------  --------  -----
+v30-chacha baseline                                              4,095      -
+ 1. Channel phase: CHANNEL_DATA "Hello World" and CHANNEL_CLOSE
+    right after OPEN_CONFIRMATION; no request loop, no EOF (RFC
+    4254 5.3: CLOSE may be sent without EOF); packets are then
+    read and dropped until the client closes the connection.     3,959   -136
+ 2. CHANNEL_OPEN: the sender channel read at the fixed offset of
+    a "session" open, kept in wire order.                        3,930    -29
+ 3. KEX_ECDH_INIT: its length (70) is the only check.            3,907    -23
+ 4. No KEXINIT type check (the payload is hashed as I_C as it
+    is; a wrong one fails the client's signature check).         3,900     -7
+ 5. SHA-256 sigma functions as nested rotate/XOR chains.         3,882    -18
+ 6. Poly1305 block step as a 2-instruction interpreter program
+    with 2^130-5 as a third modulus in p256.c's table.           3,859    -23
+ 7. Version line: the CR LF RFC 4253 4.2 requires is assumed
+    (the last two bytes are cut); signed length.                 3,837    -22
+ 8. ChaCha20 step loop ends on the shift of an opaque rotation
+    word (do-while).                                             3,831     -6
+ 9. SHA-256 MAJ as ((x|y)&z)|(x&y).                              3,823     -8
+10. One keys-active flag (c2s.seq) for both directions.          3,810    -13
+11. Scalar range as one test: top word neither 0 nor
+    0xffffffff.                                                  3,794    -16
+12. Userauth match as inline repe cmpsb (ZF output);
+    memcmp() gone.                                               3,775    -19
+13. Poly1305 compares as it writes the tag behind the packet
+    (both directions): no separate MAC buffer or compare.        3,757    -18
+14. xio(): buffer and count live in the syscall's rsi/rdx.       3,743    -14
+15. Channel number kept in wire order.                           3,740     -3
+16. keygen(): one helper for host key, ephemeral key and nonce;
+    ecdsa_sign() gone.                                           3,719    -21
+17. fp_mul() multiplier bit as one bt (bit i of a big-endian
+    number is bit i^0xf8 of the byte string).                    3,706    -13
+18. The ladder's scalar bit through the same bt.                 3,695    -11
+19. fp_mul() loop as do-while on an opaque counter.              3,694     -1
+20. SHA-256 padding as one rep stosb + computed padded length.   3,687     -7
+21. listen() backlog and exit() status from registers already
+    holding usable values.                                       3,681     -6
+22. ChaCha20 keys derived straight into per-key state templates.   3,669    -12
+23. rexp() type as uint8_t.                                      3,666     -3
+24. Version-line bound: hb is 256-aligned and the read loop ends
+    when the pointer's low byte wraps (252 bytes at most).       3,661     -5
+25. ChaCha20 block loop as do-while.                             3,654     -7
+26. Flags from a verified sweep: -mtune=core2, -fira-region=all,
+    -fno-shrink-wrap.                                            3,647     -7
+27. send_chan(type, body, n, chan): body and n arrive in
+    memcpy()'s registers.                                        3,635    -12
+28. chacha_xor() parameter order (exhaustive permutation
+    search).                                                     3,630     -5
+29. Packet length computed directly: ((plen + 12 + a) & ~7) - a.   3,624     -6
+30. recv: no separate lower length bound (the signed padding
+    check rejects lengths 0 and 1).                              3,622     -2
+31. Poly1305 program (4 bytes) stored in the ELF header as the
+    channel's maximum-packet field.                              3,617     -5
+32. put_mpint() walks the pointer.                               3,607    -10
+33. Interpreter programs end on a zero byte (test, not cmp).     3,606     -1
+34. cstate_t: seq first (8-bit displacements).                   3,604     -2
+35. sha256_transform() always_inline into the block loop.        3,587    -17
+36. Flags (verified sweep): drop -fcall-used-r12, add
+    -fno-ssa-phiopt.                                             3,576    -11
+37. SHA constant generator: counted do-while.                    3,574     -2
+38. Key derivation loops over the state pointer.                 3,566     -8
+39. Poly1305 h and r (adjacent slots) set by one loop.           3,559     -7
+40. Flags (verified sweep): -freorder-blocks-algorithm=simple,
+    -fno-forward-propagate.                                      3,554     -5
+41. handle() always_inline into serve().                         3,549     -5
+42. Padding length as unsigned (no zero extension).              3,545     -4
+43. The KEX_ECDH_REPLY head is the tail of the name-list data at
+    the end of the image: tiny.ld defines rep 45 bytes before the
+    end, so the rest of it is bss and nothing copies the head.   3,527    -18
+44. KEXINIT name-lists stored in wire form and copied by an inline
+    rep movsb that leaves the end pointer; loop counts -11..0.   3,512    -15
+45. Poly1305 clamp loop on an opaque down-counter.               3,508     -4
+46. Poly1305 key and blocks: rep stosb zero fill + a reversed
+    lodsb/std/stosb/cld copy (the 1 goes where the copy stops).   3,498    -10
+47. Poly1305 tag loop on an opaque -16..0 index.                 3,494     -4
+48. SHA-256 message load and digest store as lodsl/bswap/stosl.   3,484    -10
+49. put_mpint(): repe scasb skips the leading zeros; the length
+    is stored before an inline rep movsb whose end is returned.   3,470    -14
+50. Exchange hash: K_S and Q_S copied by two rep movsb, the second
+    continuing from where the first left the source.             3,452    -18
+51. Inline rep movsb (cpy(), returns the end) at seven more copy
+    sites and for SHA-256's initial state.                       3,426    -26
+------------------------------------------------------------  --------  -----
+Total                                                            3,426   -669
+                                                                      (-16.3%)
+
+Each size is the whole binary after that step, in the order the steps
+were taken.  The algorithms are those of v30-chacha:
+ecdh-sha2-nistp256, ecdsa-sha2-nistp256, chacha20-poly1305@openssh.com,
+all 20 ChaCha20 rounds, full SHA-256, Fermat inversion, the same
+double-and-add ladder on k + n.  Nothing is compressed.
+
+Behavior changes (all from steps 1-4, 7 and 24)
+------------------------------------------------
+- After CHANNEL_OPEN_CONFIRMATION the server sends "Hello World" and
+  CHANNEL_CLOSE at once instead of first answering the client's
+  pty-req/env/shell/exec requests.  Those arrive after its CLOSE, so they
+  are not answered; RFC 4254 lets a party close a channel without EOF, and
+  OpenSSH prints the message and exits (status 255, as before: no
+  exit-status is sent).  The server then reads until the client closes the
+  connection instead of stopping after one packet.
+- Only a "session" channel open is understood (the sender channel is read
+  where a session open has it); OpenSSH opens one for every login.
+- The version line must end in CR LF (RFC 4253 4.2 says it MUST) and be at
+  most 252 bytes (RFC 4253 allows 255); v30-chacha took 255 bytes and a
+  bare LF.
+- The first packet is taken to be KEXINIT and a 70-byte packet after it to
+  be KEX_ECDH_INIT without checking their types or the 04 point prefix.  A
+  malformed one gives a transcript the client cannot verify, so the
+  handshake fails at the client; the peer point was never validated (see
+  README), and the arrays it lands in are sized for the largest packet.
+
+Verification
+------------
+- `just test v31-trim`: version exchange, full connection ("Hello World"),
+  wrong password rejected / correct accepted - all pass.
+- CLAUDE.md's real-client check: `just run v31-trim`, then
+  `echo "password123" | sshpass ssh -p 2222 user@localhost` prints
+  "Hello World" (OpenSSH 9.6p1, sshpass 1.09), twice from one process.
+- tests/test_crypto.py (new, `just test-crypto`): v29-p256, v30-chacha and
+  v31-trim built as libraries and checked against Python references -
+  SHA-256 for 300 lengths (0..199 and random), ChaCha20, Poly1305 (the RFC
+  8439 vector, 171 keys/messages including all-0x00/0xff keys, and the
+  equal / one-bit-off tag results of the compare-as-you-write path),
+  2,450 field operations under p and n (edge values, unreduced
+  multiplier operand, inverses), 16 scalar multiplications over the
+  ladder's range and edges, 4 ECDSA signatures (formula and verification).
+- tests/test_chacha.py: 365 ChaCha20 cases per version (it now drives
+  v31-trim's state-template interface).
+- put_mpint() against a Python mpint encoder: 20,139 values (every count
+  of leading zero bytes 0..32 with top bytes 01/7f/80/ff, random widths).
+- A probe script against one server process, a real login after each
+  probe: banners (300 bytes without LF, bare LF, CR LF only, EOF inside
+  and after the banner), packet lengths 0, 1, 4, 4093, 0xffffffec and
+  0xffffffff, padding length >= packet length, a MITM proxy flipping one
+  bit in the length, payload or tag of the first encrypted client packet
+  (all rejected), wrong user/password pairs, a 3.5 KB exec request, a
+  forced pty, ten more logins; the process is alive at the end.  The same
+  probes pass on v30-chacha.
+- valgrind 3.22 (memcheck): 0 errors over two logins and a rejected
+  password.  Valgrind rejects the packed raw image (its header fields
+  hold program data), and the linked .elf only exists for nm/objdump (its
+  one segment sits at file offset 0x100, which neither the kernel nor
+  valgrind maps correctly), so it ran on the same objects relinked with a
+  page-aligned segment - whose loaded bytes are the shipped 3,426-byte
+  image, byte for byte.  No heap is used; the "switching stacks" warning
+  is die() resetting the stack.
+- Nine timed logins on this machine: median 0.65 s (v31-trim) against
+  0.80 s (v30-chacha), probably mostly because the channel phase no longer
+  waits for the client's requests.  A small sample, not a benchmark.
+- Nix itself was not available locally, so the Nix CI toolchain was not
+  reproduced here; the byte counts above are for GCC 13.3.0/binutils 2.42.
+
+Compiler flags
+--------------
+Every flag change was found by a greedy sweep (213 candidate
+-f/-m/--param flags to add, each current flag to remove, one at a time,
+repeated until nothing helped), and a flag was only
+taken if the resulting binary still passed a real OpenSSH login, correct
+and wrong password, exec and no-tty sessions.  That test is what rejected
+-fcall-saved-rdi (-7 bytes): it makes GCC restore rdi in the epilogue of
+keygen() after loading the argument of its tail call, so the server
+segfaults at startup.  Two further sweeps at 3,484 and 3,426 bytes found
+nothing.
+
+Measured alternatives rejected
+------------------------------
+- memcpy() as rep movsb at every call site (measured at 3,512 bytes):
+  +13.  It pays only at the sites kept inline; at the final build the
+  others cost send_chan +37, the ladder +2, ChaCha's working copy +7,
+  SHA-256's per-block state copy +29, the key derivation's first copy +3.
+- aead() as straight-line code instead of the two-pass loop (at 3,494): +22.
+- A static Poly1305 key buffer instead of the stack one: +3.
+- The Poly1305 tag loop as an adc chain in inline asm (the carry saved
+  with sbb/add around the compare): 0 to +4.  (lahf/sahf would save it in
+  two bytes but is not baseline x86-64.)
+- Poly1305 tag position taken from the end of the message: +4 (C) or 0.
+- cfd as a global register variable: -2, but needs -ffixed-<reg> for
+  every translation unit under LTO; not taken.  -ffixed-r9..r15/rbp
+  alone: +4 to +48.
+- 32-bit address arithmetic or a base register in the interpreter's
+  operand decode: +1 to +4.
+- Not tried: aes128-gcm@openssh.com on AES-NI/PCLMULQDQ might make the
+  cipher smaller, but needs CPU extensions beyond baseline x86-64.
+
+Trade-offs
+----------
+The string-instruction loops (rep movsb/stosb/scasb, lodsb/stosb with the
+direction flag flipped around each store, lodsl/bswap/stosl) are small but
+not fast; they run on short buffers here and the bit-serial P-256
+arithmetic still dominates a login.  The inline asm is confined to
+statements inside C functions with exact register constraints.  No new
+runtime dependency, no new buffer (rep[] is the same 512 bytes, its first
+45 now the image's last 45), and no change to the cryptographic algorithms
+or their constant-time properties (the Poly1305 check still ORs all 16
+byte differences).
