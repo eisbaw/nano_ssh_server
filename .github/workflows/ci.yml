@@ -45,6 +45,10 @@ jobs:
         run: |
           nix-shell --run "just test-chacha"
 
+      - name: Check P-256 crypto core against references
+        run: |
+          nix-shell --run "just test-crypto"
+
       - name: Test all versions
         run: |
           nix-shell --run "just test-all"

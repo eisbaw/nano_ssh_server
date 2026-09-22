@@ -31,7 +31,8 @@ VERSIONS=(
     "v27-onecurve:One Curve25519 implementation for KEX and signing"
     "v28-chapoly:chacha20-poly1305 on the Ed25519 field arithmetic"
     "v29-p256:P-256 key exchange and host key on one modular multiplier"
-    "v30-chacha:Smallest overall: shared ChaCha20 add/XOR/rotate step"
+    "v30-chacha:Shared ChaCha20 add/XOR/rotate step"
+    "v31-trim:Smallest overall: v30-chacha trimmed by 669 bytes"
 )
 
 # Stats

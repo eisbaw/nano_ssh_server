@@ -4,15 +4,15 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **4,095 bytes** (`v30-chacha`, fully static,
+The smallest working build is **3,426 bytes** (`v31-trim`, fully static,
 zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v30-chacha           # recommended/smallest: under 4 KiB, fully static
-just run v30-chacha             # listens on 2222
+just build v31-trim             # recommended/smallest: 3,426 bytes, fully static
+just run v31-trim               # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +26,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version      | Bytes   | Size   | Linkage                | Notes                                |
 |--------------|---------|--------|------------------------|--------------------------------------|
-| v30-chacha   |   4,095 | 4.0 KB | static, no libc        | Recommended/smallest: shared ChaCha20 add/XOR/rotate step |
+| v31-trim     |   3,426 | 3.3 KB | static, no libc        | Recommended/smallest: shorter channel phase, string-instruction copies, data in place |
+| v30-chacha   |   4,095 | 4.0 KB | static, no libc        | Shared ChaCha20 add/XOR/rotate step |
 | v29-p256     |   4,118 | 4.0 KB | static, no libc        | P-256 key exchange and host key on one modular multiplier |
 | v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | chacha20-poly1305 on the Ed25519 field arithmetic |
 | v27-onecurve |   9,946 | 9.7 KB | static, no libc        | One Curve25519 implementation for KEX and signing |
@@ -51,6 +52,28 @@ savings are 3,857 bytes (−48.4%), 1,971 bytes (−19.8%) and 2,128 bytes
 so musl-gcc and plain gcc emit identical bytes.) `v25-pack` rebuilt with that
 toolchain is 13,928 bytes. See each version's `optimization_log.txt` for the
 step-by-step breakdown.
+
+`v31-trim` keeps `v30-chacha`'s algorithms (ecdh-sha2-nistp256,
+ecdsa-sha2-nistp256, chacha20-poly1305@openssh.com, all 20 ChaCha20 rounds)
+and takes **669 bytes (16.3%)** off it in 51 measured steps: **3,426 bytes
+versus 4,095** with the same gcc 13.3 / binutils 2.42. The largest single
+step is the channel phase: "Hello World" and `CHANNEL_CLOSE` go out right
+after the open confirmation (RFC 4254 lets a channel close without EOF)
+instead of after a loop answering the client's pty/shell/exec requests.
+The rest is golf on what was already there: copies, the SHA-256 message
+load, Poly1305's byte reversal and the mpint encoder as x86 string
+instructions (`rep movsb` returning the end pointer, `repe scasb`,
+`lodsl`/`bswap`/`stosl`); Poly1305's block step as a two-instruction
+program for the existing P-256 interpreter; the multiplier's and the
+ladder's bit tests as one `bt`; the KEX reply's constant head overlaid on
+the last 45 bytes of the image (the linker script puts the reply buffer
+there, so the rest of it is bss); the KEXINIT name-lists stored in wire
+form; and compiler flags from a sweep that only kept a flag if the binary
+still served a real OpenSSH login (it caught `-fcall-saved-rdi`, which
+miscompiles a tail call). `just test-crypto` checks the P-256 versions'
+SHA-256, ChaCha20, Poly1305, field arithmetic, scalar multiplication and
+ECDSA against independent Python references. See
+`v31-trim/optimization_log.txt` for every step and its size.
 
 `v30-chacha` retains `v29-p256`'s curve, hash, protocol and build flags. It
 packs the eight ChaCha20 quarter-round operand sets into 16 bytes and uses
@@ -146,8 +169,8 @@ on-disk file while leaving the runtime RAM footprint unchanged.
 | Feature        | Implementation                          |
 |----------------|-----------------------------------------|
 | Protocol       | SSH-2.0                                 |
-| Key exchange   | Curve25519; NIST P-256 (`v29-p256`, `v30-chacha`) |
-| Host key       | Ed25519; ECDSA P-256 (`v29-p256`, `v30-chacha`) |
+| Key exchange   | Curve25519; NIST P-256 (`v29-p256` and later) |
+| Host key       | Ed25519; ECDSA P-256 (`v29-p256` and later) |
 | Cipher         | AES-128-CTR (vanilla) or ChaCha20-Poly1305 |
 | MAC            | HMAC-SHA256                             |
 | Authentication | Password (hardcoded `user`/`password123`)|
@@ -190,6 +213,14 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   reads (`objcopy -O binary` emits the file: no post-processing script);
   errors abandon the connection by re-entering the accept loop on a
   private stack instead of returning through every caller
+- String instructions and data in place (`v31-trim`): copies as inline
+  `rep movsb` that hand back the end pointer (so consecutive copies chain),
+  `repe scasb` to strip an mpint's leading zeros, `lodsl`/`bswap`/`stosl`
+  for SHA-256's big-endian words and a `lodsb`/`std`/`stosb`/`cld` loop for
+  Poly1305's byte reversal; the KEX reply's constant head overlaid on the
+  last bytes of the image; the channel phase cut to open confirmation,
+  data and close; compiler flags from a sweep that keeps a flag only if the
+  binary still serves a real login
 - One curve implementation (`v27-onecurve`): X25519 runs on the Edwards group
   law linked for Ed25519, so the Montgomery ladder disappears; the field
   inverse is `exp2523(x)^8 · x^3` so one exponentiation chain serves both the
@@ -214,6 +245,7 @@ on-disk file while leaving the runtime RAM footprint unchanged.
 just test-all-sshpass           # runs each production version end-to-end
 just test v0-vanilla            # unit + connection tests for one version
 just test-chacha                # independent cipher vectors and boundary tests
+just test-crypto                # P-256 versions' crypto core vs Python references
 just size-report                # table of all built binary sizes
 just valgrind v0-vanilla        # memory leak check
 ```
@@ -241,7 +273,8 @@ nano_ssh_server/
 ├── v27-onecurve/      one Curve25519 implementation for KEX and signing
 ├── v28-chapoly/       chacha20-poly1305 on the Ed25519 field arithmetic
 ├── v29-p256/          P-256 on one modular multiplier
-├── v30-chacha/        recommended/smallest: shared ChaCha20 round step
+├── v30-chacha/        shared ChaCha20 round step
+├── v31-trim/          recommended/smallest: v30 trimmed by 669 bytes
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -255,11 +288,11 @@ nano_ssh_server/
 
 ## Status
 
-Sixteen production versions are validated end-to-end against a real OpenSSH
-client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
+Seventeen production versions are validated end-to-end against a real
+OpenSSH client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
 `v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
 `v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`,
-`v28-chapoly`, `v29-p256`, `v30-chacha`.
+`v28-chapoly`, `v29-p256`, `v30-chacha`, `v31-trim`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -319,6 +352,16 @@ not to be exposed to a network either). What it does not do:
 
 `v30-chacha` inherits all of `v29-p256`'s security and interoperability
 limitations; its changes only restructure the ChaCha20 computation.
+
+`v31-trim` inherits them too and is stricter about what it accepts: it
+sends "Hello World" and closes the channel without answering the client's
+channel requests (they arrive after its close), understands only a
+`session` channel open, requires the version line to end in CR LF and to
+fit in 252 bytes, takes the client's first packet as its KEXINIT without
+checking the type and the next as KEX_ECDH_INIT by its length alone (a
+wrong one fails the client's signature check). Its crypto is
+unchanged; the Poly1305 check still compares all 16 bytes without an
+early exit.
 
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.
