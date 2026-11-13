@@ -37,3 +37,6 @@ build-musl/
 
 # Claude Code workflow worktrees (harness-generated)
 .claude/worktrees/
+
+# Python bytecode caches (tests/)
+__pycache__/

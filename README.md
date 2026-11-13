@@ -4,15 +4,16 @@ A minimal SSH-2.0 server intended for microcontrollers. Speaks enough of the
 protocol to authenticate a user and emit a single message ("Hello World"), then
 disconnects. Designed for size, not security.
 
-The smallest working build is **3,426 bytes** (`v31-trim`, fully static,
-zero runtime dependencies) or 20 KB (`v23-scratch`, dynamic).
+The smallest working build is **2,393 bytes** (`v32-asm`, fully static,
+zero runtime dependencies, hand-written x86-64 assembly); the smallest in C
+is 3,426 bytes (`v31-trim`), the smallest dynamic one 20 KB (`v23-scratch`).
 
 ## Quick Start
 
 ```bash
 nix-shell                       # enters dev environment
-just build v31-trim             # recommended/smallest: 3,426 bytes, fully static
-just run v31-trim               # listens on 2222
+just build v32-asm              # smallest: 2,393 bytes, fully static
+just run v32-asm                # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
 
@@ -26,7 +27,8 @@ smallest first. Run `just size-report` to regenerate.
 
 | Version      | Bytes   | Size   | Linkage                | Notes                                |
 |--------------|---------|--------|------------------------|--------------------------------------|
-| v31-trim     |   3,426 | 3.3 KB | static, no libc        | Recommended/smallest: shorter channel phase, string-instruction copies, data in place |
+| v32-asm      |   2,393 | 2.3 KB | static, no libc        | Smallest: v31-trim's server in hand-written x86-64 assembly |
+| v31-trim     |   3,426 | 3.3 KB | static, no libc        | Smallest in C: shorter channel phase, string-instruction copies, data in place |
 | v30-chacha   |   4,095 | 4.0 KB | static, no libc        | Shared ChaCha20 add/XOR/rotate step |
 | v29-p256     |   4,118 | 4.0 KB | static, no libc        | P-256 key exchange and host key on one modular multiplier |
 | v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | chacha20-poly1305 on the Ed25519 field arithmetic |
@@ -51,7 +53,45 @@ savings are 3,857 bytes (−48.4%), 1,971 bytes (−19.8%) and 2,128 bytes
 (−17.6%). (The freestanding builds are `-nostdlib`,
 so musl-gcc and plain gcc emit identical bytes.) `v25-pack` rebuilt with that
 toolchain is 13,928 bytes. See each version's `optimization_log.txt` for the
-step-by-step breakdown.
+step-by-step breakdown. In `nix-shell` the compiler wrapper adds hardening
+flags; the one that the freestanding C versions do not override,
+`-fzero-call-used-regs=used-gpr`, makes `v29-p256`, `v30-chacha` and
+`v31-trim` 4,368, 4,345 and 3,618 bytes there (for `v31-trim` that flag
+was measured to be the whole difference). `v32-asm` has no compiler in its
+build and is 2,393 bytes with either toolchain, byte for byte.
+
+`v32-asm` is `v31-trim`'s server - the same key exchange, host key, cipher
+and hash, the same field-operation interpreter running the same ladder
+program - written directly in x86-64 assembly: **2,393 bytes versus 3,426**
+(1,033 bytes, 30.2%; against the 3,618 that `v31-trim` is in `nix-shell`,
+33.9%). Nothing is compressed and no algorithm changed; the bytes come
+from what a compiler cannot do with this program. One base register
+reaches the field elements and another the packet buffer and connection
+state with one-byte displacements, where GCC loaded a 32-bit address each
+time. Registers follow the data instead of the ABI: a pointer left behind
+by one `rep movsb` is where the next copy starts, and a register that
+already points into the image's 64 KiB is re-aimed by its low 16 bits. A
+256-bit add or subtract is a 14-byte `adc`/`sbb` loop (C has no carry
+flag), a modular add or subtract three such passes with one fix-up test
+for both, and the three bit counters of ladder, multiplier and inversion
+count up to 256 in byte registers that are therefore zero again when next
+needed. The SHA-256 constants come from the x87 (`fdivr`/`fsqrt`/`fscale`
+at two bytes each), the three moduli are generated from 16 stored bytes
+instead of 96, the message schedule is stored downwards so the sliding
+window of working variables overwrites each word right after its round,
+and Poly1305's final addition and constant-time tag compare share one
+loop. One sequence number serves both directions and also says whether
+the keys are in use; one routine produces the length keystream, the
+Poly1305 key and the payload keystream in a single ChaCha20 pass. The ELF
+header's unread fields hold two interpreter programs, the dispatch table,
+the channel confirmation, the listening address and the version string.
+A few more protocol checks went (see Security). `just test-asm` runs the
+routines - assembled from the same file with a command loop in place of
+the socket - against Python references, `just test-probes` throws
+malformed input at one server process and requires a real login after
+each probe, and valgrind reports no errors. A login takes as long as with
+`v31-trim` (0.57 s against 0.56 s here). See
+`v32-asm/optimization_log.txt`.
 
 `v31-trim` keeps `v30-chacha`'s algorithms (ecdh-sha2-nistp256,
 ecdsa-sha2-nistp256, chacha20-poly1305@openssh.com, all 20 ChaCha20 rounds)
@@ -221,6 +261,15 @@ on-disk file while leaving the runtime RAM footprint unchanged.
   last bytes of the image; the channel phase cut to open confirmation,
   data and close; compiler flags from a sweep that keeps a flag only if the
   binary still serves a real login
+- Hand-written assembly (`v32-asm`): base registers with one-byte
+  displacements for the element file and the packet buffer; carry-flag
+  arithmetic (`adc`/`sbb` loops, `rcl`/`rcr` to park a carry); byte
+  counters that wrap to zero; register values carried between routines
+  instead of reloaded (`mov cl, n` where `rcx` is known to be zero, 16-bit
+  re-aiming of pointers); x87 for the SHA-256 constants; moduli generated
+  at startup; one keystream pass per packet direction; data in every
+  unread ELF header field; a unit-test build of the same source
+  (`-DTEST`) so the golfed routines stay checked against references
 - One curve implementation (`v27-onecurve`): X25519 runs on the Edwards group
   law linked for Ed25519, so the Montgomery ladder disappears; the field
   inverse is `exp2523(x)^8 · x^3` so one exponentiation chain serves both the
@@ -246,6 +295,8 @@ just test-all-sshpass           # runs each production version end-to-end
 just test v0-vanilla            # unit + connection tests for one version
 just test-chacha                # independent cipher vectors and boundary tests
 just test-crypto                # P-256 versions' crypto core vs Python references
+just test-asm                   # v32-asm's routines vs Python references
+just test-probes v32-asm        # malformed input against one server process
 just size-report                # table of all built binary sizes
 just valgrind v0-vanilla        # memory leak check
 ```
@@ -274,7 +325,8 @@ nano_ssh_server/
 ├── v28-chapoly/       chacha20-poly1305 on the Ed25519 field arithmetic
 ├── v29-p256/          P-256 on one modular multiplier
 ├── v30-chacha/        shared ChaCha20 round step
-├── v31-trim/          recommended/smallest: v30 trimmed by 669 bytes
+├── v31-trim/          smallest in C: v30 trimmed by 669 bytes
+├── v32-asm/           smallest: v31-trim's server in x86-64 assembly
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -288,11 +340,11 @@ nano_ssh_server/
 
 ## Status
 
-Seventeen production versions are validated end-to-end against a real
+Eighteen production versions are validated end-to-end against a real
 OpenSSH client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
 `v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
 `v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`,
-`v28-chapoly`, `v29-p256`, `v30-chacha`, `v31-trim`.
+`v28-chapoly`, `v29-p256`, `v30-chacha`, `v31-trim`, `v32-asm`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -362,6 +414,23 @@ checking the type and the next as KEX_ECDH_INIT by its length alone (a
 wrong one fails the client's signature check). Its crypto is
 unchanged; the Poly1305 check still compares all 16 bytes without an
 early exit.
+
+`v32-asm` inherits all of that and checks less still: the client's
+NEWKEYS, SERVICE_REQUEST and CHANNEL_OPEN are taken by their position in
+the exchange, not by their type byte, and KEX_ECDH_INIT not even by its
+length (a client that sends something else ends up with a transcript,
+keys or a channel that do not match, and gives up); the userauth request
+is matched against the 55 expected bytes without comparing the payload
+length, so trailing bytes are accepted (the bytes compared are always the
+client's own or this connection's KEX reply, never another connection's);
+padding is zero bytes rather than random ones; the KEXINIT cookie is 16
+bytes of the ephemeral public key rather than separate random bytes; and
+what the client sends after the channel is closed is read and dropped
+undecrypted. Its field inversion skips the multiplication for zero bits
+of the exponent, which is the public modulus minus two; everything that
+handles a secret is as (non-)constant-time as in `v29-p256`. The length
+guard, the tag check before decryption and the constant-time tag compare
+are covered by `just test-asm` and `just test-probes`.
 
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.

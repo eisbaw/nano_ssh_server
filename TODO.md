@@ -432,6 +432,17 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ## Phase 3: Optimization Iterations
 
+### v32-asm: v31-trim's server in assembly
+- [x] Preserve v31-trim (3,426 bytes) and create an independent version
+- [x] Rewrite the server in x86-64 assembly, same algorithms and protocol: 2,766 bytes
+- [x] Golf layout, registers and the packet layer in measured steps: 2,393 bytes
+- [x] Add a unit-test build of the same source and a driver with Python references
+- [x] Add a malformed-input probe test (one process, a real login after every probe)
+- [x] Make it clean under valgrind (0 errors) and identical with both toolchains
+- [x] Verify correct/wrong passwords and "Hello World" with real OpenSSH
+- [x] Register v32-asm and its tests in the justfile and Nix CI workflow
+- [x] Document the steps, behavior changes and verification
+
 ### v31-trim: Trim v30-chacha further
 - [x] Preserve v30-chacha (4,095 bytes) and create an independent version
 - [x] Cut the channel phase to open confirmation, data and close (RFC 4254)

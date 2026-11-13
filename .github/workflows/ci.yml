@@ -49,6 +49,14 @@ jobs:
         run: |
           nix-shell --run "just test-crypto"
 
+      - name: Check v32-asm routines against references
+        run: |
+          nix-shell --run "just test-asm"
+
+      - name: Probe v32-asm with malformed input
+        run: |
+          nix-shell --run "just test-probes v32-asm"
+
       - name: Test all versions
         run: |
           nix-shell --run "just test-all"
