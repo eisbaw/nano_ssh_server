@@ -1,0 +1,281 @@
+v32-asm optimization log
+========================
+Baseline: v31-trim at commit e5062c178442ac2fee76b709027e373000919c62,
+which is untouched; v32-asm is a separate directory.
+
+Result: 3,426 -> 2,393 bytes, -1,033 bytes (-30.2%), like for like
+(v31-trim built with plain GCC 13.3.0 / binutils 2.42, Ubuntu 24.04).
+In nix-shell, which is what CI builds with, v31-trim comes out at 3,618
+bytes - the Nix compiler wrapper adds -fzero-call-used-regs=used-gpr,
+which v31-trim's Makefile does not override (measured: that one flag is
+the whole 192 bytes) - so there the step is 3,618 -> 2,393 (-33.9%).
+v32-asm is 2,393 bytes with both toolchains, byte for byte (cmp): there
+is no compiler in its build to pass flags to.
+
+No executable compression: the 2,393 bytes are the image the kernel maps.
+
+What it is
+----------
+v31-trim's server - ecdh-sha2-nistp256, ecdsa-sha2-nistp256,
+chacha20-poly1305@openssh.com with all 20 rounds, full SHA-256, Fermat
+inversion, the same double-and-add ladder on k + n, the same programs for
+the same field-operation interpreter - rewritten as one x86-64 assembly
+file (main.S), which also spells out the ELF header.  flat.ld puts the one
+section at 0x400000 and ld --oformat binary writes it out; the C compiler
+driver only runs the preprocessor and the assembler.
+
+Where the bytes went (v31-trim's code is in C, so its numbers are GCC's;
+the split of the header data differs a little between the two):
+
+                                          v31-trim   v32-asm
+  ELF header incl. data placed in it           114       114
+  startup: SHA constants, host key, sockets    208       188
+  handshake and channel phase (serve)          776       523
+  packet layer: send, receive, I/O, die        381       251
+  ChaCha20 + Poly1305                          511       310
+  SHA-256                                      341       273
+  mpint                                         48        31
+  P-256: keygen, ladder, interpreter,          589       334
+    field add/sub/mul/inverse
+  data: programs, G, moduli, tables, strings   458       369
+                                             -----     -----
+                                             3,426     2,393
+(from nm on both linked images; v32-asm's startup also generates the
+moduli, which are data in v31-trim)
+
+Steps
+-----
+Each size is the whole binary at that point, in the order the work was
+done; every one of them served real OpenSSH logins (right password, wrong
+password, right again from the same process) and passed the unit tests as
+they stood then.
+
+Step                                                          Size (B)  Delta
+------------------------------------------------------------  --------  -----
+v31-trim baseline (C, GCC 13.3)                                  3,426      -
+ 1. The same program in assembly, routine for routine: rbx
+    as the base of the element file, rbp of the packet buffer
+    (one-byte displacements instead of 32-bit addresses),
+    registers instead of the ABI's argument shuffling, a
+    256-bit add/subtract as an adc/sbb loop (the C had no carry
+    flag), field add/sub as three raw passes with one fix-up
+    test for both, the interpreter's decode as a 3-pass nibble
+    loop with a 4-byte dispatch table, SHA constants on the x87
+    (fdivr/fsqrt/fscale, 2 bytes each), zero padding instead of
+    random padding.                                              2,766   -660
+ 2. Data in the ELF header's unread fields (the affine program
+    in e_ident, the dispatch table in e_version, the channel
+    confirmation and the Poly1305 program in e_phoff/e_shoff,
+    the constant 1 in p_type, V_S over p_memsz/p_align); the
+    moduli p, n and 2^130-5 generated at startup from 16 stored
+    bytes instead of 96; one keystream routine for the packet
+    layer (crypt: length keystream + K_2 from block 0 over the
+    Poly1305 key and the payload in one pass); one sequence
+    number for both directions, which also says whether the
+    keys are in use; descriptors and sequence number in memory
+    below the packet buffer, which frees the registers the
+    three bit counters live in (they count up to 256 in a byte
+    and are zero again for the next use); the KEXINIT cookie
+    from the ephemeral public key; no KEX_ECDH_INIT length
+    check; no type check in the userauth loop.                   2,529   -237
+ 3. Startup golf (prime loop in ebx, `loop` for the root
+    iteration, p's and n's ff runs as one fill, syscall numbers
+    by mov al); SHA-256 with W stored downwards so the sliding
+    window of working variables overwrites each W[i] right
+    after its round; the inversion as square / square-and-
+    multiply programs picked by the (public) exponent bit, no
+    select-and-copy; raw passes entered with rcx = 0 known.     2,471    -58
+ 4. Registers that already hold an address in the image's
+    64 KiB re-pointed by their low 16 bits (18 places, 1 byte
+    each, each commented); send_packet takes the total from
+    where rdi ends;
+    Poly1305 counts by mov cl where rcx is 0.                    2,443    -28
+ 5. NEWKEYS, SERVICE_REQUEST and CHANNEL_OPEN taken by position
+    instead of by type (see "Behavior changes"); senders hand
+    over the payload's end instead of its length; "expand
+    32-byte k" as two immediates; the modulus register kept
+    across the encrypted phase for Poly1305; V_C's length
+    through a saved pointer.                                     2,412    -31
+ 6. Poly1305's final addition and the tag compare as one loop
+    (the carry parked in a register across the XOR/OR with
+    rcl/rcr); two more mov cl; the userauth failure's length
+    word from a shift.                                           2,400    -12
+ 7. Key derivation as one loop over the four keys; the userauth
+    request matched without looking at the payload length.       2,383    -17
+ 8. Made clean under valgrind (see "Verification"): SHA-256's
+    frame entirely above rsp and the digest stored before the
+    frame is released (+8); the final drain as a bounded read
+    loop instead of one read with an impossible count (+5);
+    setsockopt() given a real option length (+2).                2,398    +15
+ 9. Sequence number and length keystream cleared from rsi,
+    which accept() left zero.                                    2,397     -1
+10. Four more counts set by mov cl: rcx is zero, or below 256
+    after ChaCha20's last block and after a failed compare.      2,393     -4
+------------------------------------------------------------  --------  -----
+Total                                                            2,393 -1,033
+                                                                      (-30.2%)
+
+Behavior changes against v31-trim
+---------------------------------
+- NEWKEYS, SERVICE_REQUEST and CHANNEL_OPEN are taken for what the
+  protocol says comes at that point; their type byte is not checked
+  (v31-trim closed the connection on any other type).  A client that
+  sends something else gets its own packet echoed (NEWKEYS, SERVICE) or a
+  confirmation for a channel it did not open, and gives up.  It gains
+  nothing by that: keys only match after a real key exchange, and the
+  session channel is only reached after the password.  v31-trim had
+  already dropped the type checks of KEXINIT and KEX_ECDH_INIT on the same
+  argument.
+- KEX_ECDH_INIT's length is not checked either: whatever follows the
+  packet header is used as the client's point.  A malformed one gives a
+  transcript the client cannot verify, as before; the peer point was
+  never validated (see README).
+- During userauth any packet that is not the one acceptable request is
+  answered with USERAUTH_FAILURE (v31-trim: only USERAUTH_REQUESTs; other
+  types closed the connection), and the payload length is not compared:
+  the 55 bytes at the payload's position must equal the request.  They
+  are the client's own bytes - this packet's, or left from its earlier
+  ones - or the server's KEX reply of this connection, which is longer
+  than 55 bytes and is built in that buffer before any userauth: no byte
+  there comes from another connection, so the password still has to come
+  from the client.  A request with trailing bytes is now accepted.
+- Padding is zero bytes instead of random bytes (RFC 4253 6: random
+  padding is a SHOULD).  Before NEWKEYS it is in the clear either way;
+  after, it is encrypted by ChaCha20 under a per-packet nonce.  Zeroing
+  rather than leaving the buffer as it is matters: the buffer is reused
+  across connections.
+- The KEXINIT cookie is the first 16 bytes of the server's ephemeral
+  public key instead of 16 bytes from getrandom(): still a fresh random
+  value of ours per connection, and one the client is sent anyway.  The
+  ephemeral key is therefore generated before the version exchange.
+- After CHANNEL_CLOSE the client's remaining bytes are read and dropped
+  without being decrypted (v31-trim received them as packets), until it
+  closes the connection.
+- The inversion skips the multiplication where the exponent's bit is
+  clear.  The exponent is m - 2 for the public modulus, so nothing secret
+  decides it; the field operations themselves are as data-independent as
+  before (cmov for the addend, the conditional correction always run).
+Everything else - the version line's rules, one "session" channel, the
+client's requests after the open going unanswered, no rekeying, no
+exit-status - is v31-trim's.
+
+Verification
+------------
+All with GCC 13.3.0 / binutils 2.42 (Ubuntu 24.04) and in nix-shell
+(GCC 13.3.0 / binutils 2.43.1, OpenSSH 9.9p1, sshpass 1.10); the two
+builds are identical.
+- `just test v32-asm`: version exchange, full connection ("Hello World"),
+  wrong password rejected / correct accepted - all pass.
+- CLAUDE.md's real-client check: `just run v32-asm`, then
+  `echo "password123" | sshpass ssh -p 2222 user@localhost` prints
+  "Hello World", twice from one process (run with -o
+  StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null: the host key
+  is new at every start).  A second server started on the same port
+  exits at once with a nonzero status; `make PORT=2244` gives a server on
+  that port.
+- `just test-asm` (tests/test_asm.py, new): main.S assembled with -DTEST,
+  which replaces the listening socket by a command loop (test_main.S), so
+  the routines run exactly as in the server, and compared with Python
+  references - all 72 generated SHA-256 constants against FIPS 180-4;
+  SHA-256 for 300 lengths; ChaCha20 for 62 lengths with a guard behind
+  the buffer; Poly1305 for 170 keys/messages, each also with the right
+  tag in place (reported equal) and with one bit of it flipped (reported
+  different, and overwritten); 6,558 field operations under p, n and
+  2^130-5 (edge values, operands aliased as the programs alias them, the
+  unreduced operands ECDSA relies on, inverses); 16 scalar
+  multiplications over the ladder's range and edges; 4 ECDSA signatures
+  (formula and verification, including hashes of 2^256-1, n and n+1);
+  528 mpint encodings (every count of leading zero bytes); the key
+  generator's range; and the packet layer back to back: what
+  send_packet() writes is parsed and decrypted in Python, fed to
+  recv_packet(), and once more with one random bit flipped in the
+  length, the payload or the tag, which must end the connection.
+  Mutations of main.S (a SHA rotation, a ChaCha rotation, the Poly1305
+  clamp, the carry test of the field add, one instruction of the ladder,
+  the mpint sign test, the exponent's "- 2", the tag check jumped over)
+  each make it fail.
+- `just test-probes v32-asm` (tests/test_probes.py, new): one server
+  process; 22 malformed openings (version lines of 300 bytes with and
+  without LF, bare LF, end of file at each stage, packet lengths 0, 1,
+  4, 4093, 0xffffffec, 0xffffffff, padding as long as or longer than the
+  packet, garbage KEXINIT and KEX_ECDH_INIT, noise after NEWKEYS); a
+  proxy that flips one bit in the length, the payload or the tag of the
+  first encrypted packet of a real OpenSSH client (the login must fail);
+  six wrong user/password pairs; a 3.5 KB exec request, a forced pty, no
+  pty; ten more logins.  After every probe a real login must print
+  "Hello World": 46 logins from the one process.  v31-trim passes the
+  same script.
+- valgrind 3.23 (memcheck): 0 errors, 0 bytes allocated, over two logins
+  and a rejected password.  Valgrind cannot load the flat image (its
+  header fields hold program data), so it ran `nano_ssh_server.elf`,
+  which the Makefile links from the same object with debug.ld: an
+  ordinary ELF file whose .text is the shipped image, byte for byte
+  (cmp), at the same address, with the same bss behind it.  The
+  "switching stacks" warning is die resetting the stack.  Three things
+  were changed to get there (step 8): SHA-256 read its state out of a
+  frame it had just released, the final read() named a count far beyond
+  its buffer (the kernel stops at the end of the mapping), and
+  setsockopt() named an option length beyond its option (the kernel
+  reads four bytes).  None of them could go wrong in this program, but
+  memcheck is right about all three.
+- Timing, nine logins each on this machine (2.1 GHz Xeon): median 0.57 s
+  against 0.56 s for v31-trim (a small sample, not a benchmark).  Field
+  add/subtract takes three byte-wise passes instead of two; the
+  inversion skipping the multiplications for zero bits presumably makes
+  up for most of it.  Startup to accept(): 0.18 s.
+
+Measured and rejected
+---------------------
+- -mx32 for v31-trim's C (32-bit pointers in 64-bit mode): 3,433 bytes, +7.
+- `loop` in the raw add/subtract passes: -4 bytes, 2.2 s per login.
+- Reading the rest of the connection with one read() of 4 GiB into the
+  last mapped buffer (the kernel stops it at the end of the mapping): 5
+  bytes shorter and memory-safe, but memcheck rightly flags the count.
+- SHA-256's W[16..63] below the stack pointer (nothing is pushed while a
+  block runs): 6 bytes shorter and it passed every test, but memory
+  below the stack pointer is free as far as memcheck (or a signal
+  handler) is concerned, so it went before the valgrind run.
+
+Considered and not built (byte counts estimated from the encodings)
+-------------------------------------------------------------------
+- Little-endian field elements with 64-bit limbs: shorter and much faster
+  loops, but every point and hash that crosses the wire needs reversing;
+  estimated a net loss of about 20 bytes.
+- Sharing the ladder's loop between the scalar multiplication and the
+  inversion: the glue (other slots, a three-element copy) costs about
+  what the second loop does.
+- Jacobian coordinates or a complete addition formula for the ladder
+  step: by the published operation counts neither gets below the 39
+  instructions of the projective double-and-add.
+- Computing the ChaCha20 quarter-round indices instead of storing them
+  (q = ((k 0x1111 + t 0x3210) & 0x3333) | 0xc840), or rotating the rows
+  in memory for the diagonal rounds: within a few bytes of the 16-byte
+  table and its lookup either way.
+- One adc/sbb loop for both directions (self-modified, or with jrcxz
+  around two `not al`): not smaller than the second 20-byte loop.
+- The KEX reply written to the socket in pieces from the transcript
+  instead of copied into the packet buffer: each extra write costs more
+  than its copy.
+- LAHF/SAHF to carry the flags across the tag compare: not in baseline
+  x86-64 (v31-trim made the same call).
+- aes128-gcm@openssh.com on AES-NI/PCLMULQDQ (CPU extensions beyond
+  baseline x86-64); a dedicated 64-bit Poly1305 in place of the 124 bytes
+  that now ride on the field arithmetic.
+
+Trade-offs
+----------
+- Assembly for one architecture.  The C versions were x86-64 only since
+  v29-p256's inline asm and ELF header, but they could be read as C; this
+  one is 1,300 lines of assembly, most of them commented.  The algorithms and the
+  layout tricks are described where they are used; v31-trim remains the
+  readable reference for the same server.
+- Register invariants instead of initialisations: three byte counters
+  are zero when their loop is entered because it left them so, rcx is
+  zero after every rep/loop and is set with mov cl, registers are
+  re-pointed by their low 16 bits where they are known to hold an address
+  in the image's 64 KiB.  Each such place is commented; the unit tests
+  and the probes exercise all of them, and a wrong one fails loudly (a
+  wrong address or count), not subtly.
+- The image is one read-write-execute segment, as in v29..v31.
+- No new runtime dependency, no heap; the private stack and all buffers
+  are bss.

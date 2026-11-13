@@ -102,6 +102,14 @@ test-chacha:
 test-crypto:
     @python3 tests/test_crypto.py
 
+# Compare v32-asm's routines (assembled with -DTEST) with independent references
+test-asm:
+    @python3 tests/test_asm.py
+
+# Throw malformed input at one server process; it must keep serving real logins
+test-probes VERSION="v32-asm":
+    @python3 tests/test_probes.py {{VERSION}}
+
 # Connect to running server with SSH client (run in separate terminal)
 connect:
     @echo "Connecting to SSH server on port 2222..."
