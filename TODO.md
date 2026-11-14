@@ -432,6 +432,18 @@ This document tracks all tasks for implementing the world's smallest SSH server 
 
 ## Phase 3: Optimization Iterations
 
+### v33-portable: the same server with a portable C core
+- [x] Preserve v31-trim and v32-asm and create an independent version
+- [x] Write the core in strict ISO C99 (no assembly, extensions, byte-order or word-size assumptions)
+- [x] Put the platform behind three functions: POSIX sockets, and Linux x86-64 without libc
+- [x] Reuse v32-asm's unit tests through a C driver; run them under ASan + UBSan and with Clang
+- [x] Run the unit tests and real OpenSSH logins on big-endian and 32-bit targets under qemu
+- [x] Reduce the x86-64 build in measured steps: 4,835 -> 4,124 bytes
+- [x] Make both builds clean under valgrind (0 errors) and identical with both toolchains
+- [x] Verify correct/wrong passwords and "Hello World" with real OpenSSH
+- [x] Register v33-portable and its tests in the justfile and Nix CI workflow
+- [x] Document the design, steps, behavior and verification
+
 ### v32-asm: v31-trim's server in assembly
 - [x] Preserve v31-trim (3,426 bytes) and create an independent version
 - [x] Rewrite the server in x86-64 assembly, same algorithms and protocol: 2,766 bytes

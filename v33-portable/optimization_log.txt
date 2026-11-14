@@ -1,0 +1,252 @@
+v33-portable log
+================
+Baseline: v31-trim (C with GCC extensions and inline assembly) and v32-asm
+(assembly) at commit 500f5a3, both untouched; v33-portable is a separate
+directory.
+
+Result: 4,124 bytes for the x86-64 Linux build (nanossh.c +
+net_linux_x86_64.c + tiny.ld), the same with GCC 13.3.0 / binutils 2.42
+(Ubuntu 24.04) and in nix-shell (GCC 13.3.0 / binutils 2.43.1), byte for
+byte (cmp).  That is 698 bytes more than v31-trim (3,426; 3,618 in
+nix-shell) and 1,731 more than v32-asm (2,393): the price of a core that
+is ISO C99 and runs unchanged on big-endian and 32-bit processors.  It is
+221 bytes less than v30-chacha is in nix-shell (4,345; 4,095 with plain
+GCC, 29 bytes less than this), so it is the third smallest version there.
+
+No executable compression: the 4,124 bytes are the image the kernel maps.
+
+The core alone, for a microcontroller's toolchain rather than this one:
+3,727 bytes of code and constants as Thumb-2 (arm-gcc 13.3 -Os -mthumb,
+`size nanossh.o`, text), and about 10.4 KB of static RAM at the default
+NANOSSH_MAXPKT of 4092 - two buffers of that size, plus 1.3 KB.
+
+What it is
+----------
+The server of v31-trim and v32-asm: ecdh-sha2-nistp256,
+ecdsa-sha2-nistp256, chacha20-poly1305@openssh.com with all 20 rounds,
+full SHA-256, Fermat inversion, the double-and-add ladder on k + n, the
+field-operation interpreter and its programs, password authentication, one
+session channel that prints "Hello World".  The protocol steps and their
+order are v32-asm's.
+
+  nanossh.c, nanossh.h   the core: strict C99 (-std=c99 -pedantic -Wall
+                         -Wextra -Werror in every build), no extensions, no
+                         assembly, no integer wider than 32 bits needed,
+                         no floating point, no allocation.  Words are read
+                         and written a byte at a time with shifts, so
+                         there is no byte order and no alignment to get
+                         wrong; no negative number is shifted and no
+                         pointer is cast to another type; carries are
+                         unsigned.  It needs memcpy(), memset(), three
+                         functions from the platform - read, write,
+                         random bytes - and by default setjmp/longjmp.
+  net_posix.c            the platform for anything with sockets and a C
+                         library (80 lines); nano_ssh_server.posix.
+  net_linux_x86_64.c/.h  the platform without a C library: raw system
+                         calls, _start, memcpy/memset; with tiny.ld (the
+                         ELF header as data, v31-trim's layout) this is
+                         nano_ssh_server, the binary that is measured.
+                         GNU C, x86-64 Linux only, by design.
+  test_main.c            the unit-test driver (not in either server).
+
+Where the bytes went (nm on the linked images; v31-trim's and v32-asm's
+columns are from v32-asm's log):
+
+                                          v31-trim   v32-asm   v33
+  ELF header incl. data placed in it           114       114    114
+  startup: SHA constants, host key,            208       188    388
+    sockets, accept loop
+  handshake and channel phase (serve)          776       523    895
+  packet layer: send, receive, I/O             381       251    385
+  ChaCha20 + Poly1305                          511       310    619
+  SHA-256                                      341       273    359
+  mpint, 32-bit loads and stores                48        31     88
+  P-256: keygen, ladder, interpreter,          589       334    693
+    field add/sub/mul/inverse
+  data: programs, G, moduli, tables, strings   458       369    583
+                                             -----     -----  -----
+                                             3,426     2,393  4,124
+
+What portable C costs, against v31-trim's C: a copy cannot continue where
+the last one stopped (every memcpy() loads both addresses and the count
+afresh); a 32-bit word is four bytes and three shifts (GCC makes
+get32() a load and a bswap, but it stays a call); carries live in an
+integer instead of the flags; nothing stays in a register across calls
+by convention; and the SHA-256 constants come from the field arithmetic
+instead of sqrtsd.
+
+Steps
+-----
+Each size is the x86-64 binary at that point, in the order the work was
+done; each of them served real OpenSSH logins and, from step 2 on, passed
+the unit tests.
+
+Step                                                          Size (B)  Delta
+------------------------------------------------------------  --------  -----
+ 1. First working version: v31-trim's C restructured around
+    v32-asm's design (one sequence number, zero padding, the
+    cookie from the ephemeral key, no type checks where the
+    protocol fixes the order, key derivation as a loop), all
+    of it rewritten without extensions; packets received into
+    one buffer and copied into the transcript; -Os              4,835      -
+ 2. -Oz, and three flags from a first sweep
+    (-fno-inline-functions-called-once,
+    -fno-move-loop-invariants, -fno-toplevel-reorder)           4,514   -321
+ 3. Giving a connection up without setjmp in the libc-free
+    platform: the core's NANOSSH_LONGJMP is a macro, and there
+    it resets the stack and re-enters the accept loop
+    (v31-trim's trick, now outside the core).  The three
+    channel messages as a table and a loop.  Key derivation
+    as a straight-line loop body                                4,444    -70
+ 4. nanossh_restart() declared noreturn.  The SHA-256
+    constants extracted by interpreter programs instead of
+    calls (the root is built from the top, the prime's digits
+    fed in as they are used).  V_C's length and the two
+    signature lengths as single byte stores: the blob's first
+    31 bytes are copied from K_S, which begins the same way     4,348    -96
+ 5. The root extraction without digit feeding: X = 4x and
+    Z = X + 4 keep everything integral from the first step.
+    Inversion as two five-byte programs chosen by the
+    exponent's bit                                              4,260    -88
+ 6. tiny.ld places four objects in ELF header fields the
+    kernel does not read - the inversion programs, the affine
+    program, the connection descriptor and the version string
+    - by the section names -fdata-sections gives them; the C
+    is unchanged and unaware                                    4,228    -32
+ 7. Flag sweep on the final source, greedy, each flag kept
+    only if the binary got smaller: + -mtune=core2
+    -fno-caller-saves -fno-tree-reassoc -fno-ssa-phiopt
+    -fira-region=all -freorder-blocks-algorithm=simple
+    -fno-tree-ccp, - -fno-toplevel-reorder                      4,124   -104
+------------------------------------------------------------  --------  -----
+Total                                                            4,124
+
+Behavior against v32-asm
+------------------------
+The same, except where the C made the stricter choice the cheaper or the
+only portable one:
+- The userauth request is compared with the one acceptable request in
+  constant time, and its length is compared too: trailing bytes are no
+  longer accepted.
+- The scalar never selects an address or a branch: the ladder keeps
+  R + P or R under a mask over all three coordinates, and the multiplier
+  adds a or 0 by masking inside the adder.  (v31-trim and v32-asm select
+  with cmov, which is constant-time on x86 but not something C can ask
+  for.)  The adder's own correction is masked as before.
+- The ladder sets Z = 1 itself instead of relying on every program to
+  leave the Z slot zero.
+- The version line may be 255 bytes (RFC 4253 4.2), not 252.
+- ChaCha20 takes any length, not only multiples of four.
+- The SHA-256 constants are generated with integer arithmetic (the
+  field's) instead of x87 floating point; the moduli are data again.
+- After CHANNEL_CLOSE the client's remaining bytes are read and dropped in
+  pieces of the packet buffer's size until the client closes, as before;
+  with net_posix.c the server then returns to accept() by returning
+  from nanossh_serve() instead of by a jump.
+Unchanged from v32-asm: NEWKEYS, SERVICE_REQUEST and CHANNEL_OPEN are
+taken by their position, KEX_ECDH_INIT as it comes (a client that sends
+something else gets a transcript, keys or a channel that do not match);
+zero padding; the cookie is 16 bytes of the ephemeral public key; one
+packet in, one packet out until the channel is open; a 4092-byte limit on
+received packets (NANOSSH_MAXPKT); a fresh host key at every start.
+
+Verification
+------------
+In nix-shell (GCC 13.3.0, binutils 2.43.1, OpenSSH 9.9p1, valgrind 3.23)
+unless stated; the x86-64 binary is identical with Ubuntu 24.04's GCC.
+
+- `just test v33-portable`: version exchange, full connection ("Hello
+  World"), wrong and right password - 3/3.
+- CLAUDE.md's real-client check: `just run v33-portable`, then
+  `echo "password123" | sshpass ssh -p 2222 user@localhost` (with the
+  host-key options) prints "Hello World".
+- `just test-portable` (tests/test_portable.py, new): test_main.c includes
+  nanossh.c and answers the requests v32-asm's test build answers, so the
+  references and cases of tests/test_asm.py apply unchanged - all 72
+  generated SHA-256 constants against FIPS 180-4; SHA-256 for every
+  length 0..199 and 100 random ones; ChaCha20; Poly1305 (RFC 8439's
+  vector, random and extreme keys and messages, equal and one-bit-off
+  tags); add, subtract, multiply and invert under p and n, add and
+  multiply under 2^130-5, aliased and unreduced operands (6,558 cases);
+  16 scalar multiplications over the ladder's range and its edges; ECDSA
+  signatures by formula and by verification; the mpint encoder (528
+  cases); the key generator; the packet layer back to back, with single
+  flipped bits refused - plus ChaCha20 at every length 1..69 and from
+  block 1 (246 cases).  Run twice: gcc -O2, and gcc -O2 with
+  AddressSanitizer and UndefinedBehaviorSanitizer, where any report is
+  fatal.  Both pass.  (The core is compiled with -std=c99 -pedantic -Wall
+  -Wextra -Werror here too; it is also clean under -Wconversion -Wshadow.)
+- The same unit tests with clang 18.1.3 (Ubuntu), -O2, same strict
+  flags: pass.  (Its sanitizer runtimes are not installed here, so the
+  sanitizer run is GCC's only.)
+- `just test-portable-cross` (v33-portable/test_cross.sh, cross.nix; new):
+  the same unit tests cross-compiled and run under qemu-user 9.1.1, and
+  the server itself (nanossh.c + net_posix.c) cross-compiled, started
+  under qemu and logged into with OpenSSH, on
+      s390x   64-bit, big-endian        armv7l  32-bit, little-endian
+      ppc64   64-bit, big-endian        i686    32-bit, little-endian
+  All four pass the unit tests (with 40 random iterations per check
+  instead of 100) and print "Hello World" to the client.
+  (Not in CI: the cross compilers are a 500 MB download.)
+- `just test-probes v33-portable` and `just test-probes v33-portable
+  nano_ssh_server.posix` (tests/test_probes.py): 22 malformed openings, a
+  flipped bit in the first encrypted packet, wrong credentials, long
+  commands, with and without a terminal - 46 logins served by one process
+  in between, for each of the two builds.
+- valgrind 3.23 (memcheck, --leak-check=full --track-origins=yes), each
+  build serving three logins, a wrong password, a malformed packet, 3,000
+  random bytes and a fourth login: 0 errors, 0 bytes allocated, for
+  nano_ssh_server.posix and for nano_ssh_server.elf.  (The .elf is the
+  shipped image's twin: the same bytes at the same addresses behind an
+  ordinary ELF header, with symbols.  valgrind does not accept the packed
+  header of the raw image, as with v31-trim and v32-asm, so
+  `just valgrind v33-portable` cannot be used; run it on one of these.)
+- NANOSSH_MAXPKT: a build with 2000 serves OpenSSH 9.9 (whose KEXINIT is
+  about 1.5 KB); one with 1024 drops the connection at that packet, as it
+  should.
+- `just test-all`, `just test-all-sshpass`, `just test-crypto`,
+  `just test-chacha`, `just test-asm`: the other versions are unaffected
+  (tests/test_asm.py gained a function boundary so that its checks can be
+  reused; `just test-asm` passes as before).
+
+- Timing on this machine (2.1 GHz Xeon), nine logins each, medians:
+  0.55 s (nano_ssh_server), 0.52 s (nano_ssh_server.posix, -O2), against
+  0.59 s for v32-asm and 0.66 s for v31-trim in the same session - the
+  same within the noise.  From starting the server to its first
+  version banner - the SHA-256 constants, the host key and the first
+  connection's key pair - takes 0.46 s (v32-asm: 0.42 s; it does not
+  generate the constants this way).  All of it is the bit-serial
+  multiplication: a login is about 21,000 of them, each 512 additions of
+  32 bytes.  On a processor a hundred times slower that is a minute.
+
+Not verified: a compiler other than GCC and Clang; a processor whose int
+is 16 bits (the code is written for it - every shift of more than 15 is
+on a uint32_t, sizes are size_t - but nothing here can run it); a real
+microcontroller or network stack other than the kernel's.
+
+Measured and rejected
+---------------------
+(sizes of the final source with the one change)
+- The SHA-256 constants as a 288-byte const table instead of generating
+  them: 4,205 bytes, +81.  For a port that has the flash but not the RAM
+  (288 bytes) or the start-up time, a const table in place of sha_k[] and
+  sha_init() is the only change needed.
+- __builtin_setjmp/__builtin_longjmp in the libc-free platform instead of
+  resetting the stack: 4,208 bytes, +84.
+- Selecting the multiplier's addend and the ladder's result by pointer
+  instead of by mask, as v31-trim does: 4,082 bytes, -42 - and whether the
+  scalar's bits reach a branch is then up to the compiler.  Kept the
+  masks.
+- A helper for Poly1305's two byte-reversed copies: 4,124, no change (GCC
+  inlines it back).
+
+Considered, not built
+---------------------
+- Generating the SHA-256 constants with doubles as v31-trim does: it
+  would put floating point into a core meant for processors without it.
+- Receiving packets straight into the transcript as v31-trim and v32-asm
+  do: it saves a copy, but every packet routine then takes a buffer
+  argument, and the transcript needs room for a second full-size packet.
+- Wider limbs for the field arithmetic: fewer loop iterations per
+  addition, but more code, and a byte order to get right wherever a
+  number enters or leaves.

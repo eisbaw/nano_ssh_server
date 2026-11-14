@@ -107,8 +107,17 @@ test-asm:
     @python3 tests/test_asm.py
 
 # Throw malformed input at one server process; it must keep serving real logins
-test-probes VERSION="v32-asm":
-    @python3 tests/test_probes.py {{VERSION}}
+test-probes VERSION="v32-asm" BINARY="nano_ssh_server":
+    @python3 tests/test_probes.py {{VERSION}} --binary {{BINARY}}
+
+# Compare v33-portable's core with independent references, plain and under ASan + UBSan
+test-portable:
+    @python3 tests/test_portable.py
+    @python3 tests/test_portable.py --sanitize
+
+# The same on big-endian and 32-bit targets (cross compilers and qemu from v33-portable/cross.nix; large download)
+test-portable-cross:
+    @bash v33-portable/test_cross.sh
 
 # Connect to running server with SSH client (run in separate terminal)
 connect:

@@ -154,8 +154,12 @@ class FlipProxy(threading.Thread):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version", nargs="?", default="v32-asm")
+    parser.add_argument("--binary", default="nano_ssh_server",
+                        help="the file in the version's directory to run "
+                             "(v33-portable also builds "
+                             "nano_ssh_server.posix)")
     args = parser.parse_args()
-    exe = ROOT / args.version / "nano_ssh_server"
+    exe = ROOT / args.version / args.binary
     if not exe.exists():
         sys.exit(f"{exe} not found: just build {args.version}")
 
