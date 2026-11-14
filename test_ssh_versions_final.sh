@@ -34,6 +34,7 @@ VERSIONS=(
     "v30-chacha:Shared ChaCha20 add/XOR/rotate step"
     "v31-trim:v30-chacha trimmed by 669 bytes"
     "v32-asm:Smallest overall: v31-trim's server in hand-written assembly"
+    "v33-portable:Portable: the same server with an ISO C99 core"
 )
 
 # Stats

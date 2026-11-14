@@ -58,15 +58,16 @@ H256 = "6a09e667 bb67ae85 3c6ef372 a54ff53a 510e527f 9b05688c 1f83d9ab " \
 
 
 class Target:
-    """The -DTEST build of a version, restarted when it exits."""
+    """The test build of a version (a command line), restarted when it
+    exits."""
 
-    def __init__(self, exe):
-        self.exe = exe
+    def __init__(self, argv):
+        self.argv = argv
         self.p = None
 
     def start(self):
         self.stop()
-        self.p = subprocess.Popen([self.exe], stdin=subprocess.PIPE,
+        self.p = subprocess.Popen(self.argv, stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, bufsize=0)
 
     def stop(self):
@@ -148,192 +149,199 @@ def build(version, cc, ld, directory):
 
 
 def check(version, cc, ld, iters):
-    rng = random.Random(0x5eed32)
     with tempfile.TemporaryDirectory(prefix="nano-asm-") as directory:
-        t = Target(build(version, cc, ld, directory))
+        print(run_checks(version, [build(version, cc, ld, directory)], iters))
+
+
+def run_checks(version, argv, iters):
+    """Drive the test build started by argv through every check; returns
+    the summary line.  (tests/test_portable.py uses this for v33-portable,
+    whose test build answers the same requests.)"""
+    rng = random.Random(0x5eed32)
+    t = Target(argv)
+    t.start()
+
+    tab = t.call(b"T", 288)
+    words = struct.unpack("<72I", tab)
+    assert ["%08x" % w for w in words[:64]] == K256, "SHA-256 K table"
+    assert ["%08x" % w for w in words[64:]] == H256, "SHA-256 H0"
+
+    lens = list(range(200)) + [rng.randrange(6000) for _ in range(iters)]
+    for n in lens:
+        m = rng.randbytes(n)
+        out = t.call(b"S" + struct.pack("<I", n) + m, 32)
+        assert out == hashlib.sha256(m).digest(), ("sha256", n)
+
+    ccases = 0
+    for n in [4, 8, 12, 32, 60, 64, 68, 124, 128, 132, 4092, 4160] + \
+             [rng.randrange(1, 1040) * 4 for _ in range(iters // 2)]:
+        key = rng.randbytes(32)
+        seq = rng.choice([3, 4, rng.getrandbits(32)])
+        data = rng.randbytes(n)
+        guard = rng.randbytes(16)
+        out = t.call(b"C" + key + struct.pack("<II", seq, n) + data +
+                     guard, n + 16)
+        assert out[:n] == ref.chacha_ref(key, seq, 0, data), ("chacha", n)
+        assert out[n:] == guard, ("chacha overrun", n)
+        ccases += 1
+
+    key = bytes.fromhex("85d6be7857556d337f4452fe42d506a8"
+                        "0103808afb0db2fd4abff6af4149f51b")
+    msg = b"Cryptographic Forum Research Group"
+    pcases = [(key, msg)]
+    for n in list(range(1, 70)) + \
+            [rng.randrange(1, 4113) for _ in range(iters)]:
+        k = rng.randbytes(32)
+        if rng.random() < 0.2:
+            k = bytes([rng.choice([0, 0xff])]) * 32
+        m = rng.randbytes(n) if rng.random() < 0.8 else b"\xff" * n
+        pcases.append((k, m))
+    for k, m in pcases:
+        want = ref.poly_ref(k, m)
+        req = b"P" + k + struct.pack("<I", len(m)) + m
+        out = t.call(req + bytes(16), 17)
+        assert out[:16] == want, ("poly1305", len(m), k.hex())
+        assert out[16] == (want == bytes(16)), "poly1305 compare"
+        assert t.call(req + want, 17) == want + b"\1", "poly1305 equal"
+        bit = rng.randrange(128)
+        bad = bytearray(want)
+        bad[bit // 8] ^= 1 << (bit % 8)
+        assert t.call(req + bytes(bad), 17) == want + b"\0", \
+            "poly1305 differs"
+
+    fcases = 0
+
+    def fp(op, mi, a, b):
+        return b2i(t.call(b"F" + bytes([op, mi]) + i2b(a) + i2b(b), 32))
+
+    for mi, m in enumerate(MODS):
+        vals = [0, 1, 2, m - 1, m - 2, m // 2, (m + 1) // 2,
+                (1 << 255) % m, rng.randrange(m)] + \
+               [rng.randrange(m) for _ in range(iters // 4)]
+        for _ in range(iters * 3):
+            a = rng.choice(vals)
+            b = rng.choice(vals)
+            assert fp(0, mi, a, b) == (a + b) % m, ("add", mi, a, b)
+            assert fp(3, mi, a, b) == (a + b) % m, ("add d=a", mi, a, b)
+            assert fp(5, mi, a, b) == 2 * a % m, ("double", mi, a)
+            assert fp(1, mi, a, b) == (a - b) % m, ("sub", mi, a, b)
+            assert fp(4, mi, a, b) == (a - b) % m, ("sub d=b", mi, a, b)
+            assert fp(2, mi, a, b) == a * b % m, ("mul", mi, a, b)
+            bb = rng.getrandbits(256)       # multiplier: any 256 bits
+            assert fp(2, mi, a, bb) == a * bb % m, ("mul wide", mi, a, bb)
+            fcases += 7
+        if m == PP:
+            continue
+        # what the ECDSA program relies on: an unreduced first operand
+        for _ in range(iters):
+            a = rng.choice([rng.getrandbits(256), (1 << 256) - 1, m,
+                            m + 1, (1 << 256) - rng.randrange(1 << 32)])
+            b = rng.choice(vals)
+            got = fp(0, mi, a, b)
+            assert got % m == (a + b) % m and got < 1 << 256, \
+                ("add unreduced", mi, a, b)
+            fcases += 1
+        for a in [1, 2, m - 1, m - 2] + \
+                 [rng.randrange(1, m) for _ in range(iters // 4)]:
+            got = b2i(t.call(b"I" + bytes([mi]) + i2b(a), 32))
+            assert got == pow(a, m - 2, m), ("inverse", mi, a)
+            fcases += 1
+
+    def scalar():
+        while True:
+            k = rng.getrandbits(256)
+            if k < N and k >> 224:
+                return k
+
+    ks = [scalar() for _ in range(max(8, iters // 20))]
+    ks += [1 << 224, (1 << 224) + 1, (1 << 256) - (1 << 224) - 1,
+           N - 1, N - 2, N - 3, (N - 1) // 2, (N + 1) // 2]
+    pts = [ref.G, ref.pmul(scalar(), ref.G)]
+    for k in ks:
+        pt = rng.choice(pts)
+        out = t.call(b"M" + i2b(k) + i2b(pt[0]) + i2b(pt[1]), 64)
+        assert (b2i(out[:32]), b2i(out[32:])) == ref.pmul(k, pt), \
+            ("p256 [k]P", hex(k))
+
+    sigs = max(4, iters // 40)
+    zs = [rng.getrandbits(256) for _ in range(sigs)]
+    zs[:3] = [(1 << 256) - 1, N, N + 1]     # unreduced hashes
+    for z in zs:
+        d, k = scalar(), scalar()
+        out = t.call(b"E" + i2b(d) + i2b(k) + i2b(z), 64)
+        r, s = b2i(out[:32]), b2i(out[32:])
+        assert r == ref.pmul(k, ref.G)[0] % N, "ecdsa r"
+        assert s == pow(k, N - 2, N) * (z + r * d) % N, "ecdsa s"
+        w = pow(s, N - 2, N)
+        x = ref.padd(ref.pmul(z * w % N, ref.G),
+                     ref.pmul(r * w % N, ref.pmul(d, ref.G)))
+        assert x[0] % N == r, "ecdsa verify"
+        # the next multiplication must find the Z slot zero again
+        out = t.call(b"M" + i2b(k) + i2b(ref.G[0]) + i2b(ref.G[1]), 64)
+        assert (b2i(out[:32]), b2i(out[32:])) == ref.pmul(k, ref.G)
+
+    mcases = 0
+    for z in range(33):
+        for top in (0x01, 0x7f, 0x80, 0xff):
+            for _ in range(max(1, iters // 25)):
+                body = bytes([top]) + rng.randbytes(31 - z) if z < 32 \
+                    else b""
+                x = b2i(bytes(z) + body)
+                out = t.call(b"N" + i2b(x), 44)
+                want = mpint_ref(x)
+                assert struct.unpack("<I", out[:4])[0] == len(want)
+                assert out[4:4 + len(want)] == want, ("mpint", hex(x))
+                mcases += 1
+
+    for _ in range(4):
+        out = t.call(b"K", 96)
+        k = b2i(out[:32])
+        assert 1 << 224 <= k < (1 << 256) - (1 << 224), "keygen range"
+        assert (b2i(out[32:64]), b2i(out[64:])) == ref.pmul(k, ref.G)
+
+    acases = 0
+    for n in [1, 2, 3, 4, 5, 11, 12, 13, 17, 55, 165, 300, 4000] + \
+             [rng.randrange(1, 4000) for _ in range(iters // 4)]:
+        key = rng.randbytes(64)
+        seq = rng.choice([3, 4, 5, 255, 256, rng.getrandbits(32)])
+        payload = rng.randbytes(n)
+        req = b"A" + key + struct.pack("<II", seq, n) + payload
+        wire = t.call(req, wire_len(n, True))
+        assert open_packet(key, seq, wire) == payload, ("send", n)
+        back = t.call(wire, 4 + n)
+        assert back == struct.pack("<I", n) + payload, ("recv", n)
+        # one flipped bit anywhere (length, payload, tag) is refused:
+        # the target gives up on the connection, which here ends it
+        bit = rng.randrange(len(wire) * 8)
+        bad = bytearray(wire)
+        bad[bit // 8] ^= 1 << (bit % 8)
+        t.send(req)
+        t.recv(len(wire))
+        t.send(bytes(bad))
+        try:
+            t.recv(1)
+            raise AssertionError(("tampered packet accepted", n, bit))
+        except (EOFError, BrokenPipeError):
+            pass
         t.start()
+        acases += 1
+    # before NEWKEYS (sequence numbers 0..2) packets are in the clear
+    for n in [1, 17, 165, 300]:
+        payload = rng.randbytes(n)
+        seq = rng.randrange(3)
+        req = b"A" + bytes(64) + struct.pack("<II", seq, n) + payload
+        wire = t.call(req, wire_len(n, False))
+        pktlen, pad = struct.unpack(">IB", wire[:5])
+        assert pktlen == len(wire) - 4 and len(wire) % 8 == 0
+        assert 4 <= pad and wire[5:5 + n] == payload
+        assert wire[5 + n:] == bytes(pad), "plain padding"
+        assert t.call(wire, 4 + n) == struct.pack("<I", n) + payload
 
-        tab = t.call(b"T", 288)
-        words = struct.unpack("<72I", tab)
-        assert ["%08x" % w for w in words[:64]] == K256, "SHA-256 K table"
-        assert ["%08x" % w for w in words[64:]] == H256, "SHA-256 H0"
-
-        lens = list(range(200)) + [rng.randrange(6000) for _ in range(iters)]
-        for n in lens:
-            m = rng.randbytes(n)
-            out = t.call(b"S" + struct.pack("<I", n) + m, 32)
-            assert out == hashlib.sha256(m).digest(), ("sha256", n)
-
-        ccases = 0
-        for n in [4, 8, 12, 32, 60, 64, 68, 124, 128, 132, 4092, 4160] + \
-                 [rng.randrange(1, 1040) * 4 for _ in range(iters // 2)]:
-            key = rng.randbytes(32)
-            seq = rng.choice([3, 4, rng.getrandbits(32)])
-            data = rng.randbytes(n)
-            guard = rng.randbytes(16)
-            out = t.call(b"C" + key + struct.pack("<II", seq, n) + data +
-                         guard, n + 16)
-            assert out[:n] == ref.chacha_ref(key, seq, 0, data), ("chacha", n)
-            assert out[n:] == guard, ("chacha overrun", n)
-            ccases += 1
-
-        key = bytes.fromhex("85d6be7857556d337f4452fe42d506a8"
-                            "0103808afb0db2fd4abff6af4149f51b")
-        msg = b"Cryptographic Forum Research Group"
-        pcases = [(key, msg)]
-        for n in list(range(1, 70)) + \
-                [rng.randrange(1, 4113) for _ in range(iters)]:
-            k = rng.randbytes(32)
-            if rng.random() < 0.2:
-                k = bytes([rng.choice([0, 0xff])]) * 32
-            m = rng.randbytes(n) if rng.random() < 0.8 else b"\xff" * n
-            pcases.append((k, m))
-        for k, m in pcases:
-            want = ref.poly_ref(k, m)
-            req = b"P" + k + struct.pack("<I", len(m)) + m
-            out = t.call(req + bytes(16), 17)
-            assert out[:16] == want, ("poly1305", len(m), k.hex())
-            assert out[16] == (want == bytes(16)), "poly1305 compare"
-            assert t.call(req + want, 17) == want + b"\1", "poly1305 equal"
-            bit = rng.randrange(128)
-            bad = bytearray(want)
-            bad[bit // 8] ^= 1 << (bit % 8)
-            assert t.call(req + bytes(bad), 17) == want + b"\0", \
-                "poly1305 differs"
-
-        fcases = 0
-
-        def fp(op, mi, a, b):
-            return b2i(t.call(b"F" + bytes([op, mi]) + i2b(a) + i2b(b), 32))
-
-        for mi, m in enumerate(MODS):
-            vals = [0, 1, 2, m - 1, m - 2, m // 2, (m + 1) // 2,
-                    (1 << 255) % m, rng.randrange(m)] + \
-                   [rng.randrange(m) for _ in range(iters // 4)]
-            for _ in range(iters * 3):
-                a = rng.choice(vals)
-                b = rng.choice(vals)
-                assert fp(0, mi, a, b) == (a + b) % m, ("add", mi, a, b)
-                assert fp(3, mi, a, b) == (a + b) % m, ("add d=a", mi, a, b)
-                assert fp(5, mi, a, b) == 2 * a % m, ("double", mi, a)
-                assert fp(1, mi, a, b) == (a - b) % m, ("sub", mi, a, b)
-                assert fp(4, mi, a, b) == (a - b) % m, ("sub d=b", mi, a, b)
-                assert fp(2, mi, a, b) == a * b % m, ("mul", mi, a, b)
-                bb = rng.getrandbits(256)       # multiplier: any 256 bits
-                assert fp(2, mi, a, bb) == a * bb % m, ("mul wide", mi, a, bb)
-                fcases += 7
-            if m == PP:
-                continue
-            # what the ECDSA program relies on: an unreduced first operand
-            for _ in range(iters):
-                a = rng.choice([rng.getrandbits(256), (1 << 256) - 1, m,
-                                m + 1, (1 << 256) - rng.randrange(1 << 32)])
-                b = rng.choice(vals)
-                got = fp(0, mi, a, b)
-                assert got % m == (a + b) % m and got < 1 << 256, \
-                    ("add unreduced", mi, a, b)
-                fcases += 1
-            for a in [1, 2, m - 1, m - 2] + \
-                     [rng.randrange(1, m) for _ in range(iters // 4)]:
-                got = b2i(t.call(b"I" + bytes([mi]) + i2b(a), 32))
-                assert got == pow(a, m - 2, m), ("inverse", mi, a)
-                fcases += 1
-
-        def scalar():
-            while True:
-                k = rng.getrandbits(256)
-                if k < N and k >> 224:
-                    return k
-
-        ks = [scalar() for _ in range(max(8, iters // 20))]
-        ks += [1 << 224, (1 << 224) + 1, (1 << 256) - (1 << 224) - 1,
-               N - 1, N - 2, N - 3, (N - 1) // 2, (N + 1) // 2]
-        pts = [ref.G, ref.pmul(scalar(), ref.G)]
-        for k in ks:
-            pt = rng.choice(pts)
-            out = t.call(b"M" + i2b(k) + i2b(pt[0]) + i2b(pt[1]), 64)
-            assert (b2i(out[:32]), b2i(out[32:])) == ref.pmul(k, pt), \
-                ("p256 [k]P", hex(k))
-
-        sigs = max(4, iters // 40)
-        zs = [rng.getrandbits(256) for _ in range(sigs)]
-        zs[:3] = [(1 << 256) - 1, N, N + 1]     # unreduced hashes
-        for z in zs:
-            d, k = scalar(), scalar()
-            out = t.call(b"E" + i2b(d) + i2b(k) + i2b(z), 64)
-            r, s = b2i(out[:32]), b2i(out[32:])
-            assert r == ref.pmul(k, ref.G)[0] % N, "ecdsa r"
-            assert s == pow(k, N - 2, N) * (z + r * d) % N, "ecdsa s"
-            w = pow(s, N - 2, N)
-            x = ref.padd(ref.pmul(z * w % N, ref.G),
-                         ref.pmul(r * w % N, ref.pmul(d, ref.G)))
-            assert x[0] % N == r, "ecdsa verify"
-            # the next multiplication must find the Z slot zero again
-            out = t.call(b"M" + i2b(k) + i2b(ref.G[0]) + i2b(ref.G[1]), 64)
-            assert (b2i(out[:32]), b2i(out[32:])) == ref.pmul(k, ref.G)
-
-        mcases = 0
-        for z in range(33):
-            for top in (0x01, 0x7f, 0x80, 0xff):
-                for _ in range(max(1, iters // 25)):
-                    body = bytes([top]) + rng.randbytes(31 - z) if z < 32 \
-                        else b""
-                    x = b2i(bytes(z) + body)
-                    out = t.call(b"N" + i2b(x), 44)
-                    want = mpint_ref(x)
-                    assert struct.unpack("<I", out[:4])[0] == len(want)
-                    assert out[4:4 + len(want)] == want, ("mpint", hex(x))
-                    mcases += 1
-
-        for _ in range(4):
-            out = t.call(b"K", 96)
-            k = b2i(out[:32])
-            assert 1 << 224 <= k < (1 << 256) - (1 << 224), "keygen range"
-            assert (b2i(out[32:64]), b2i(out[64:])) == ref.pmul(k, ref.G)
-
-        acases = 0
-        for n in [1, 2, 3, 4, 5, 11, 12, 13, 17, 55, 165, 300, 4000] + \
-                 [rng.randrange(1, 4000) for _ in range(iters // 4)]:
-            key = rng.randbytes(64)
-            seq = rng.choice([3, 4, 5, 255, 256, rng.getrandbits(32)])
-            payload = rng.randbytes(n)
-            req = b"A" + key + struct.pack("<II", seq, n) + payload
-            wire = t.call(req, wire_len(n, True))
-            assert open_packet(key, seq, wire) == payload, ("send", n)
-            back = t.call(wire, 4 + n)
-            assert back == struct.pack("<I", n) + payload, ("recv", n)
-            # one flipped bit anywhere (length, payload, tag) is refused:
-            # the target gives up on the connection, which here ends it
-            bit = rng.randrange(len(wire) * 8)
-            bad = bytearray(wire)
-            bad[bit // 8] ^= 1 << (bit % 8)
-            t.send(req)
-            t.recv(len(wire))
-            t.send(bytes(bad))
-            try:
-                t.recv(1)
-                raise AssertionError(("tampered packet accepted", n, bit))
-            except (EOFError, BrokenPipeError):
-                pass
-            t.start()
-            acases += 1
-        # before NEWKEYS (sequence numbers 0..2) packets are in the clear
-        for n in [1, 17, 165, 300]:
-            payload = rng.randbytes(n)
-            seq = rng.randrange(3)
-            req = b"A" + bytes(64) + struct.pack("<II", seq, n) + payload
-            wire = t.call(req, wire_len(n, False))
-            pktlen, pad = struct.unpack(">IB", wire[:5])
-            assert pktlen == len(wire) - 4 and len(wire) % 8 == 0
-            assert 4 <= pad and wire[5:5 + n] == payload
-            assert wire[5 + n:] == bytes(pad), "plain padding"
-            assert t.call(wire, 4 + n) == struct.pack("<I", n) + payload
-
-        t.stop()
-        print(f"{version}: PASS - SHA-256 tables, SHA-256 {len(lens)}, "
-              f"ChaCha20 {ccases}, Poly1305 {len(pcases)}, field {fcases}, "
-              f"P-256 {len(ks)} multiplications + {sigs} signatures, "
-              f"mpint {mcases}, packets {acases} + 4")
+    t.stop()
+    return (f"{version}: PASS - SHA-256 tables, SHA-256 {len(lens)}, "
+            f"ChaCha20 {ccases}, Poly1305 {len(pcases)}, field {fcases}, "
+            f"P-256 {len(ks)} multiplications + {sigs} signatures, "
+            f"mpint {mcases}, packets {acases} + 4")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,9 @@ disconnects. Designed for size, not security.
 The smallest working build is **2,393 bytes** (`v32-asm`, fully static,
 zero runtime dependencies, hand-written x86-64 assembly); the smallest in C
 is 3,426 bytes (`v31-trim`), the smallest dynamic one 20 KB (`v23-scratch`).
+The one to port is `v33-portable`: the same server with its core in strict
+ISO C99 behind a three-function platform interface, 4,124 bytes on x86-64
+and tested on big-endian and 32-bit processors.
 
 ## Quick Start
 
@@ -16,6 +19,10 @@ just build v32-asm              # smallest: 2,393 bytes, fully static
 just run v32-asm                # listens on 2222
 ssh -p 2222 user@localhost      # password: password123
 ```
+
+For another processor or operating system, start from `v33-portable`:
+`cc -O2 nanossh.c net_posix.c` is the whole server on anything with
+sockets, and `nanossh.h` says what a platform without them has to provide.
 
 Outside Nix: `apt install gcc make just openssh-client sshpass libsodium-dev`.
 
@@ -31,6 +38,7 @@ smallest first. Run `just size-report` to regenerate.
 | v31-trim     |   3,426 | 3.3 KB | static, no libc        | Smallest in C: shorter channel phase, string-instruction copies, data in place |
 | v30-chacha   |   4,095 | 4.0 KB | static, no libc        | Shared ChaCha20 add/XOR/rotate step |
 | v29-p256     |   4,118 | 4.0 KB | static, no libc        | P-256 key exchange and host key on one modular multiplier |
+| v33-portable |   4,124 | 4.0 KB | static, no libc        | Portable: the same server with an ISO C99 core, no assembly or extensions in it |
 | v28-chapoly  |   7,975 | 7.8 KB | static, no libc        | chacha20-poly1305 on the Ed25519 field arithmetic |
 | v27-onecurve |   9,946 | 9.7 KB | static, no libc        | One Curve25519 implementation for KEX and signing |
 | v26-genk     |  12,074 |  12 KB | static, no libc        | v25-pack + generated SHA/Ed25519 constants + ELF golf |
@@ -58,7 +66,32 @@ flags; the one that the freestanding C versions do not override,
 `-fzero-call-used-regs=used-gpr`, makes `v29-p256`, `v30-chacha` and
 `v31-trim` 4,368, 4,345 and 3,618 bytes there (for `v31-trim` that flag
 was measured to be the whole difference). `v32-asm` has no compiler in its
-build and is 2,393 bytes with either toolchain, byte for byte.
+build and is 2,393 bytes with either toolchain, byte for byte, and
+`v33-portable` overrides the flag: 4,124 bytes with either, byte for byte
+(so in `nix-shell` it is smaller than `v30-chacha` and `v29-p256`).
+
+`v33-portable` is the server of `v31-trim` and `v32-asm` again - same key
+exchange, host key, cipher, hash, ladder and interpreter - with the
+opposite goal: a core (`nanossh.c`, about 900 lines) that is strict ISO
+C99 with no assembly, no compiler extensions, no floating point and no
+assumptions about byte order, alignment or word size, so that it runs
+unchanged on a microcontroller. A platform provides three functions -
+read, write, random bytes - and calls `nanossh_init()` once and
+`nanossh_serve()` per connection; `net_posix.c` does that for anything
+with sockets, `net_linux_x86_64.c` without a C library for the measured
+binary. It costs 698 bytes against `v31-trim` (**4,124 versus 3,426**):
+copies, carries and word accesses that C cannot express as compactly, and
+SHA-256 constants extracted with the field arithmetic instead of the FPU.
+The scalar's bits only ever become masks here, where `v31-trim` and
+`v32-asm` rely on conditional moves (42 bytes, measured), and the
+userauth comparison is constant-time and checks the length. The same unit
+tests as `v32-asm` pass natively, under AddressSanitizer and UBSan, with
+Clang, and cross-compiled for big-endian s390x and ppc64 and 32-bit ARMv7
+and i686 under qemu, where the server also completes real OpenSSH logins.
+The core alone is 3.7 KB of Thumb-2 code and constants and uses about
+10 KB of RAM. A login takes as long as with `v31-trim` (0.55 s here) -
+which on a slow microcontroller means minutes. See
+`v33-portable/optimization_log.txt`.
 
 `v32-asm` is `v31-trim`'s server - the same key exchange, host key, cipher
 and hash, the same field-operation interpreter running the same ladder
@@ -296,6 +329,8 @@ just test v0-vanilla            # unit + connection tests for one version
 just test-chacha                # independent cipher vectors and boundary tests
 just test-crypto                # P-256 versions' crypto core vs Python references
 just test-asm                   # v32-asm's routines vs Python references
+just test-portable              # v33-portable's core vs the same references, also under ASan + UBSan
+just test-portable-cross        # ... and on big-endian and 32-bit targets under qemu (large download)
 just test-probes v32-asm        # malformed input against one server process
 just size-report                # table of all built binary sizes
 just valgrind v0-vanilla        # memory leak check
@@ -327,6 +362,7 @@ nano_ssh_server/
 ├── v30-chacha/        shared ChaCha20 round step
 ├── v31-trim/          smallest in C: v30 trimmed by 669 bytes
 ├── v32-asm/           smallest: v31-trim's server in x86-64 assembly
+├── v33-portable/      the same server with a portable ISO C99 core
 ├── v23-*/             other size experiments (debug-strip, chacha, nolibc, etc.)
 ├── v{8,9,11..15}-*/   intermediate optimization steps (all working)
 ├── docs/              RFC summaries and implementation notes
@@ -340,11 +376,12 @@ nano_ssh_server/
 
 ## Status
 
-Eighteen production versions are validated end-to-end against a real
+Nineteen production versions are validated end-to-end against a real
 OpenSSH client on every commit: `v0-vanilla`, `v17-from14`, `v17-static2`,
 `v19-donna`, `v20-opt`, `v21-static`, `v22-c25519`, `v22-static`,
 `v23-scratch`, `v23-min`, `v25-pack`, `v26-genk`, `v27-onecurve`,
-`v28-chapoly`, `v29-p256`, `v30-chacha`, `v31-trim`, `v32-asm`.
+`v28-chapoly`, `v29-p256`, `v30-chacha`, `v31-trim`, `v32-asm`,
+`v33-portable`.
 The intermediate `v8`–`v15` and the other `v23-*` size experiments
 (debug-strip, chacha20-poly1305, nolibc, musl-static debug-strip, sstrip) also
 build and pass; they document the step-by-step size progression.
@@ -431,6 +468,19 @@ of the exponent, which is the public modulus minus two; everything that
 handles a secret is as (non-)constant-time as in `v29-p256`. The length
 guard, the tag check before decryption and the constant-time tag compare
 are covered by `just test-asm` and `just test-probes`.
+
+`v33-portable` follows `v32-asm`'s protocol - packets taken by position,
+zero padding, the cookie from the ephemeral key, a fresh host key at every
+start, the client's last bytes dropped undecrypted - with three
+differences: the userauth request is compared in constant time and by
+length too; the scalar and the multiplier's bits select by mask, not by
+conditional move or branch; and the version line may be 255 bytes. The
+client's public point is still used as it comes (not checked to be on the
+curve; the secret it meets is used for that one connection only), the
+timing of the mpint encoding still depends on leading zero bytes, and
+nothing is wiped when a connection ends. Its core is covered by
+`just test-portable` (also under ASan and UBSan) and both builds by
+`just test-probes`.
 
 Use it to study the SSH protocol, experiment with size optimization, or
 prototype on a microcontroller.

@@ -4,6 +4,14 @@
 
 This guide explains how to port the nano SSH server from Linux to embedded microcontrollers.
 
+A working example of the idea is `v33-portable`: its core (`nanossh.c`) is
+strict ISO C99 and asks the platform for three functions - `net_read()`,
+`net_write()` and `rng_bytes()`, see `v33-portable/nanossh.h` - with
+`net_posix.c` as the sockets implementation. Its interface is smaller than
+the one sketched below (the platform owns listening, accepting and
+closing), and it has been run on big-endian and 32-bit targets under qemu,
+though not yet on a real microcontroller.
+
 ## Architecture
 
 The server is designed with a **Network Abstraction Layer** to enable easy porting.

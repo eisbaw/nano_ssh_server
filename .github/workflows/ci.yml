@@ -57,6 +57,15 @@ jobs:
         run: |
           nix-shell --run "just test-probes v32-asm"
 
+      - name: Check v33-portable core against references (plain, ASan + UBSan)
+        run: |
+          nix-shell --run "just test-portable"
+
+      - name: Probe v33-portable with malformed input (both builds)
+        run: |
+          nix-shell --run "just test-probes v33-portable"
+          nix-shell --run "just test-probes v33-portable nano_ssh_server.posix"
+
       - name: Test all versions
         run: |
           nix-shell --run "just test-all"
